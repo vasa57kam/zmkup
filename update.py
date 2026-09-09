@@ -1,174 +1,165 @@
 import ast
 src = open('swh.py').read()
-def rep(old, new, label, all_=False):
+def rep(old, new, label):
     global src
     if old in src:
-        src = src.replace(old, new) if all_ else src.replace(old, new, 1)
-        print('  ok:', label)
+        src = src.replace(old, new, 1); print('  ok:', label)
     else:
         print('  ПРОПУСК:', label)
 
-# 1) Глобальные хелперы устройств с адресами (все страницы)
-if 'function devLocSync' not in src:
-    rep("    </script>\n    </body>",
-"""    window.devArr=[];
-    function devList(){
-      if(!window.devCache){
-        window.devCache=fetch('/api/network-map').then(function(r){return r.json();}).then(function(ds){ window.devArr=ds; return ds; });
-      }
-      return window.devCache;
-    }
-    function devLocSync(s){
-      if(!s||!window.devArr){ return ''; }
-      for(var i=0;i<window.devArr.length;i++){
-        var d=window.devArr[i];
-        if(d.name && s.indexOf(d.name)>=0){ return d.location||''; }
-        if(d.ip_address && s.indexOf(d.ip_address)>=0){ return d.location||''; }
-      }
-      return '';
-    }
-    devList();
-    </script>
-    </body>""", 'хелперы адресов устройств')
+# ========== 1) ПЕЧАТНЫЙ ПАСПОРТ НАРЯДА ==========
+if "'/passport/" not in src:
+    PASS = '''PASS_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Паспорт наряда {{ o.order_number }}</title>
+<style>
+body{font-family:Arial,sans-serif;font-size:12px;color:#000;margin:15mm 15mm;}
+h1{font-size:18px;margin:0 0 6px;} h2{font-size:14px;margin:14px 0 6px;}
+table{width:100%;border-collapse:collapse;margin:6px 0;}
+td,th{border:1px solid #000;padding:4px 6px;font-size:11px;text-align:left;vertical-align:top;}
+.noprint{margin:0 0 12px;} @media print{.noprint{display:none;}}
+</style></head><body>
+<div class="noprint">
+<button onclick="window.print()" style="padding:8px 16px;font-size:14px;cursor:pointer;">🖨️ Печать</button>
+<a href="/order/{{ o.id }}">← К наряду</a>
+</div>
+<h1>ПАСПОРТ НАРЯДА № {{ o.order_number }}</h1>
+<p>Дата: {{ o.created_at }} | Тип: {{ 'новая установка' if o.order_type=='new' else 'сервис' if o.order_type=='service' else 'замена коммутатора' }} | Статус: {{ o.status }}</p>
+<h2>1. Оборудование</h2>
+<table>
+<tr><th></th><th>IP</th><th>Модель</th><th>Портов</th><th>Адрес</th></tr>
+<tr><td>Старый</td><td>{{ o.old_switch_ip or '—' }}</td><td>{{ o.old_switch_model or '—' }}</td><td>{{ o.old_switch_ports }}</td><td>{{ o.old_switch_location or '—' }}</td></tr>
+<tr><td>Новый</td><td>{{ o.new_switch_ip or '—' }}</td><td>{{ o.new_switch_model or '—' }}</td><td>{{ o.new_switch_ports }}</td><td>{{ o.new_switch_location or '—' }}</td></tr>
+</table>
+<h2>2. Подключения</h2>
+<table><tr><th>Тип</th><th>Порт (стар)</th><th>Порт (нов)</th><th>Устройство</th><th>Адрес устройства</th><th>Порт там</th></tr>
+{% for l in links %}<tr><td>{{ 'UPLINK' if l.link_type=='uplink' else 'downlink' }}</td><td>{{ l.old_port }}</td><td>{{ l.new_port or '—' }}</td><td>{{ l.upstream_device }}</td><td>{{ dev_loc(l.upstream_device) or '—' }}</td><td>{{ l.upstream_port }}</td></tr>{% endfor %}
+</table>
+<h2>3. Абоненты ({{ subs|length }})</h2>
+{% if subs %}<table><tr><th>Порт (стар)</th><th>Порт (нов)</th><th>Абонент</th><th>Адрес</th><th>VLAN</th><th>MAC</th></tr>
+{% for s in subs %}<tr><td>{{ s.old_port }}</td><td>{{ s.new_port or '—' }}</td><td>{{ s.subscriber_name or '' }}</td><td>{{ s.address or '' }}</td><td>{{ s.vlan or '' }}</td><td>{{ s.mac_address or '' }}</td></tr>{% endfor %}
+</table>{% else %}<p>Абонентов нет.</p>{% endif %}
+<h2>4. Контроль FDB</h2>
+<p>Записей ДО: {{ oldn }} | ПОСЛЕ: {{ newn }} | Потеряно MAC: {{ lost|length }}</p>
+{% if lost %}<table><tr><th>MAC</th><th>Порт</th><th>Абонент</th></tr>{% for m in lost %}<tr><td>{{ m[0] }}</td><td>{{ m[1] }}</td><td>{{ m[2] }}</td></tr>{% endfor %}</table>{% endif %}
+<h2>5. Чек-лист работ</h2>
+<table>{% for s in steps %}<tr><td style="width:10px;text-align:center;">{{ '☑' if (s.done or fl.get(loop.index0)) else '☐' }}</td><td>{{ s.step_text }}</td></tr>{% endfor %}</table>
+{% if o.commands_used %}<h2>6. Использованные команды</h2><p>{{ o.commands_used }}</p><p>Нужна была машина: {{ 'ДА' if o.vehicle_needed else 'нет' }}</p>{% endif %}
+<h2>Подписи</h2>
+<table><tr><td style="height:60px;">Работу выполнил: ____________________</td><td style="height:60px;">Принял: ____________________</td></tr></table>
+</body></html>"""
 
-# 2) Форма наряда: устройства выбираются из справочника
-rep('        <input type="text" placeholder="Устройство" class="uplink-device">',
-    '        <select class="uplink-device" onchange="devSelect(this)"></select>', 'uplink: select')
-rep('        <input type="text" placeholder="Куда: свитч / IP" class="dl-device">',
-    '        <select class="dl-device" onchange="devSelect(this)"></select>', 'downlink: select')
-rep('    container.appendChild(div);',
-"""    container.appendChild(div);
-    fillDevSelect(div.querySelector('.uplink-device'));""", 'fill uplink select')
-rep('    container.appendChild(div);',
-"""    container.appendChild(div);
-    fillDevSelect(div.querySelector('.dl-device'));""", 'fill downlink select')
-if 'function fillDevSelect' not in src:
-    rep('function addDownlinkField() {',
-"""function fillDevSelect(sel){
-  if(!sel) return;
-  devList().then(function(ds){
-    sel.innerHTML='<option value="">— выберите устройство —</option><option value="__manual">✏️ Вписать вручную…</option>'+ds.map(function(d){
-      return '<option value="'+d.name+'">'+d.name+' · '+(d.ip_address||'')+' · 📍 '+(d.location||'—')+'</option>';
-    }).join('');
-  });
-}
-function devSelect(sel){
-  if(sel.value==='__manual'){
-    var v=prompt('Устройство вручную (имя / IP):');
-    if(v){
-      var o=document.createElement('option');
-      o.value=v; o.textContent=v;
-      sel.appendChild(o); sel.value=v;
-    } else { sel.value=''; }
-  }
-}
-function addDownlinkField() {""", 'fillDevSelect + devSelect')
-
-# 3) Адреса в таблицах планировщика
-rep("<td>${l.upstream_device||'-'}</td><td>${l.upstream_port||'-'}</td>",
-    "<td>${l.upstream_device||'-'}${devLocSync(l.upstream_device)?' 📍 '+devLocSync(l.upstream_device):''}</td><td>${l.upstream_port||'-'}</td>",
-    'адреса в таблицах планировщика', all_=True)
-
-# 4) Адреса в напоминаниях (замена и установка)
-rep("+' → станет с <b>'+ order.new_switch_ip +'</b> п<b>'+ (l.new_port||'?? — назначьте выше!') +'</b></li>';",
-    "+' → станет с <b>'+ order.new_switch_ip +'</b> п<b>'+ (l.new_port||'?? — назначьте выше!') +'</b> (адрес: '+ (devLocSync(l.upstream_device)||'—') +')</li>';",
-    'адрес в uplink-напоминании')
-rep("+' → станет на <b>'+ order.new_switch_ip +'</b> п<b>'+ (l.new_port||'?? — назначьте выше!') +'</b> (в базе: имя «2-й подъезд (снять)» → новое имя/IP)</li>';",
-    "+' → станет на <b>'+ order.new_switch_ip +'</b> п<b>'+ (l.new_port||'?? — назначьте выше!') +'</b> (адрес: '+ (devLocSync(l.upstream_device)||'—') +')</li>';",
-    'адрес в downlink-напоминании')
-rep("': настроить uplink на НОВЫЙ свитч <b>'+order.new_switch_ip+'</b> порт <b>'+(l.new_port||l.old_port||'??')+'</b></li>';",
-    "': настроить uplink на НОВЫЙ свитч <b>'+order.new_switch_ip+'</b> порт <b>'+(l.new_port||l.old_port||'??')+'</b> (адрес: '+(devLocSync(l.upstream_device)||'—')+')</li>';",
-    'адрес в напоминании установки uplink')
-rep("': настроить линк на НОВЫЙ свитч <b>'+order.new_switch_ip+'</b> порт <b>'+(l.new_port||'?? — назначьте выше!')+'</b></li>';",
-    "': настроить линк на НОВЫЙ свитч <b>'+order.new_switch_ip+'</b> порт <b>'+(l.new_port||'?? — назначьте выше!')+'</b> (адрес: '+(devLocSync(l.upstream_device)||'—')+')</li>';",
-    'адрес в напоминании установки downlink')
-
-# 5) Адреса на схеме наряда
-rep("port там: '+(c.dport||'?')+'</text>'",
-    "port там: '+(c.dport||'?')+' 📍 '+(devLocSync(c.dev)||'')+'</text>'",
-    'адреса на схеме наряда', all_=True)
-
-# 6) Серверный поиск адреса + адреса в отчёте
-if 'def dev_loc' not in src:
-    helper = '''
-def dev_loc(s):
-    if not s:
-        return ''
+@app.route('/passport/<int:order_id>')
+def passport(order_id):
     conn = get_db()
-    rows = conn.execute('SELECT name, ip_address, location FROM network_devices').fetchall()
+    o = conn.execute('SELECT * FROM work_orders WHERE id=?', (order_id,)).fetchone()
+    if not o:
+        conn.close()
+        return 'Наряд не найден', 404
+    links = conn.execute('SELECT * FROM links WHERE order_id=? ORDER BY link_type, old_port', (order_id,)).fetchall()
+    subs = conn.execute('SELECT * FROM subscribers WHERE order_id=? ORDER BY old_port', (order_id,)).fetchall()
+    steps = conn.execute('SELECT * FROM order_steps WHERE order_id=? ORDER BY pos', (order_id,)).fetchall()
+    oldf = conn.execute("SELECT * FROM fdb_tables WHERE order_id=? AND switch_type='old'", (order_id,)).fetchall()
+    newf = conn.execute("SELECT * FROM fdb_tables WHERE order_id=? AND switch_type='new'", (order_id,)).fetchall()
     conn.close()
-    for r in rows:
-        if r['name'] and r['name'] in s:
-            return r['location'] or ''
-        if r['ip_address'] and r['ip_address'] in s:
-            return r['location'] or ''
-    return ''
+    fl = auto_flags(order_id)
+    om = {r['mac_address'].upper(): r for r in oldf if r['mac_address']}
+    nm = {r['mac_address'].upper(): r for r in newf if r['mac_address']}
+    lost = [(m, om[m]['port'], om[m]['subscriber'] or '') for m in sorted(set(om) - set(nm))]
+    return render_template_string(PASS_HTML, o=o, links=links, subs=subs,
+        steps=steps, fl=fl, oldn=len(oldf), newn=len(newf), lost=lost, dev_loc=dev_loc)
+
 
 '''
     idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + helper + src[idx:]
-    print('  ok: серверный dev_loc')
-rep("        L.append('  порт %s (стар) -> порт %s (нов) | %s : порт %s' % (l['old_port'], np, l['upstream_device'], l['upstream_port']))",
-"""        loc = dev_loc(l['upstream_device'])
-        L.append('  порт %s (стар) -> порт %s (нов) | %s%s : порт %s' % (l['old_port'], np, l['upstream_device'], (' 📍 '+loc) if loc else '', l['upstream_port']))""",
-    'адреса в отчёте', all_=True)
+    src = src[:idx] + PASS + src[idx:]
+    print('ok: паспорт наряда')
 
-# 7) Дашборд «Незакрытые дела» на главной
-if 'id="todoBox"' not in src:
-    rep('<div style="margin-bottom:1rem;">\n    <input id="orderSearch"',
-"""<div id="todoBox" style="background:#fff8e1;border:1px solid #f1c40f;border-radius:8px;padding:1rem;margin-bottom:1rem;"></div>
-<div style="margin-bottom:1rem;">
-    <input id="orderSearch\"""", 'блок незакрытых дел')
-    rep("`).join('');\n        });",
-"""`).join('');
-            renderTodo(orders);
-        });""", 'вызов renderTodo')
-    rep('function filterOrders(){ loadOrders(); }',
-"""function renderTodo(orders){
-  var box=document.getElementById('todoBox');
-  if(!box) return;
-  var open=orders.filter(function(o){ return o.status!=='closed'; });
-  Promise.all(open.map(function(o){
-    return fetch('/api/links/'+o.id).then(function(r){return r.json();}).then(function(ls){ return {o:o, ls:ls}; });
-  })).then(function(rs){
-    var h='<b>⏰ Незакрытые дела:</b><br>';
-    rs.forEach(function(x){
-      var bu=x.ls.filter(function(l){ return l.link_type==='uplink' && !l.new_port; }).length;
-      var bd=x.ls.filter(function(l){ return l.link_type==='downlink' && !l.new_port; }).length;
-      if(bu+bd>0){
-        h+='<div>🔧 Наряд #'+x.o.order_number+': аплинков без порта: '+bu+', даунлинков: '+bd+' — <a href="/planner/'+x.o.id+'">открыть планировщик</a></div>';
+rep('<a class="btn btn-secondary" href="/api/report/{{ order_id }}" target="_blank">📄 Отчёт</a>',
+    '<a class="btn btn-secondary" href="/api/report/{{ order_id }}" target="_blank">📄 Отчёт</a>\n        <a class="btn btn-secondary" href="/passport/{{ order_id }}" target="_blank">🖨️ Паспорт</a>',
+    'кнопка паспорта на наряде')
+
+rep('<button class="btn btn-success" onclick="exportReport()">📄 Экспорт отчета</button>',
+    '<button class="btn btn-success" onclick="exportReport()">📄 Экспорт отчета</button>\n        <a class="btn btn-secondary" href="/passport/{{ order_id }}" target="_blank">🖨️ Паспорт</a>',
+    'кнопка паспорта в планировщике')
+
+# ========== 2) АВТО-ПОДТЯГИВАНИЕ ЛИНКОВ ИЗ КАРТЫ ==========
+rep('<h3>Старый коммутатор</h3>',
+    '<h3>Старый коммутатор <select id="oldFromMap" onchange="fillFromMap(this.value)" style="margin-left:1rem;padding:.4rem;max-width:340px;"><option value="">— взять с карты —</option></select></h3>',
+    'селект старого свитча из карты')
+
+rep('function showCreateOrderModal() {',
+"""function showCreateOrderModal() {
+    devList().then(function(ds){
+      var s=document.getElementById('oldFromMap');
+      if(s){
+        s.innerHTML='<option value="">— взять с карты —</option>'+ds.map(function(d){
+          return '<option value="'+d.id+'">'+d.name+' · '+(d.ip_address||'')+' · 📍 '+(d.location||'—')+'</option>';
+        }).join('');
+      }
+    });""", 'наполнение селекта карты')
+
+rep('function fillDevSelect(sel){',
+"""function fillFromMap(devId){
+  if(!devId) return;
+  Promise.all([devList(), fetch('/api/map-connections').then(function(r){return r.json();})]).then(function(res){
+    var ds=res[0], cs=res[1];
+    var dev=ds.find(function(d){ return String(d.id)===String(devId); });
+    if(!dev) return;
+    if(!confirm('Подставить старый свитч из карты: '+dev.name+' (IP, модель, адрес, порты)?')) return;
+    document.getElementById('oldSwitchIp').value=dev.ip_address||'';
+    document.getElementById('oldSwitchModel').value=dev.model||'';
+    document.getElementById('oldSwitchPorts').value=dev.total_ports||28;
+    document.getElementById('oldSwitchLocation').value=dev.location||'';
+    document.getElementById('uplinksContainer').innerHTML='';
+    document.getElementById('downlinksContainer').innerHTML='';
+    var n=0;
+    cs.forEach(function(c){
+      var other=null, portOld=null, portOther=null;
+      if(String(c.from_device_id)===String(devId)){
+        other=ds.find(function(d){ return d.id===c.to_device_id; });
+        portOld=c.from_port; portOther=c.to_port;
+      } else if(String(c.to_device_id)===String(devId)){
+        other=ds.find(function(d){ return d.id===c.from_device_id; });
+        portOld=c.to_port; portOther=c.from_port;
+      }
+      if(!other) return;
+      n++;
+      if(other.device_type==='core'){
+        addUplinkField();
+        var u=document.querySelectorAll('#uplinksContainer .uplink-field');
+        var last=u[u.length-1];
+        last.querySelector('.uplink-port').value=portOld;
+        last.querySelector('.uplink-upstream-port').value=portOther;
+        fillDevSelect(last.querySelector('.uplink-device'), other.name);
+      } else {
+        addDownlinkField();
+        var dd=document.querySelectorAll('#downlinksContainer .uplink-field');
+        var last2=dd[dd.length-1];
+        last2.querySelector('.dl-port').value=portOld;
+        last2.querySelector('.dl-upstream-port').value=portOther;
+        fillDevSelect(last2.querySelector('.dl-device'), other.name);
       }
     });
-    fetch('/api/inventory').then(function(r){return r.json();}).then(function(inv){
-      inv.forEach(function(i){
-        if(i.status==='removed'||i.status==='to_reset'){
-          h+='<div>📦 '+(i.model||'')+' ('+(i.last_ip||'')+'): '+(i.status==='removed'?'снят, ждёт решения':'НУЖНО СБРОСИТЬ')+' — <a href="/stock">склад</a></div>';
-        }
-      });
-      box.innerHTML=h;
-      if(h.indexOf('<div>')<0){ box.innerHTML='<b>👍 Незакрытых дел нет</b>'; }
-    });
-  }).catch(function(){ box.style.display='none'; });
+    alert('Готово: линий подтянуто с карты: '+n);
+  });
 }
-function filterOrders(){ loadOrders(); }""", 'функция renderTodo')
+function fillDevSelect(sel, pre){""", 'fillFromMap + preselect в fillDevSelect')
 
-# 8) Копирование команд в один клик
-rep("h+='<button class=\"btn btn-danger\" style=\"padding:2px 8px;\" data-id=\"'+c.id+'\" onclick=\"delCmd(this.dataset.id)\">🗑</button>';",
-"""h+='<button class="btn btn-danger" style="padding:2px 8px;" data-id="'+c.id+'" onclick="delCmd(this.dataset.id)">🗑</button> ';
-      h+='<button class="btn btn-secondary" style="padding:2px 8px;" data-id="'+c.id+'" onclick="copyCmd(this.dataset.id)">📋 копировать</button>';""", 'кнопка копирования команды')
-if 'function copyCmd' not in src:
-    rep('function loadCmds(){',
-"""function copyCmd(id){
-  var c=(window.cmdRows||[]).find(function(x){ return String(x.id)===String(id); });
-  if(c && navigator.clipboard){
-    navigator.clipboard.writeText(c.body||'');
-    alert('Команда скопирована в буфер');
-  }
-}
-function loadCmds(){""", 'copyCmd')
-    rep("    document.getElementById('cmdList').innerHTML=h||'<p>Справочник пуст</p>';",
-"""    window.cmdRows=rows;
-    document.getElementById('cmdList').innerHTML=h||'<p>Справочник пуст</p>';""", 'cmdRows для копирования')
+rep("""    sel.innerHTML='<option value="">— выберите устройство —</option><option value="__manual">✏️ Вписать вручную…</option>'+ds.map(function(d){
+      return '<option value="'+d.name+'">'+d.name+' · '+(d.ip_address||'')+' · 📍 '+(d.location||'—')+'</option>';
+    }).join('');
+  });""",
+"""    sel.innerHTML='<option value="">— выберите устройство —</option><option value="__manual">✏️ Вписать вручную…</option>'+ds.map(function(d){
+      return '<option value="'+d.name+'">'+d.name+' · '+(d.ip_address||'')+' · 📍 '+(d.location||'—')+'</option>';
+    }).join('');
+    if(pre){
+      var ex=false;
+      for(var i=0;i<sel.options.length;i++){ if(sel.options[i].value===pre){ ex=true; break; } }
+      if(!ex){ var o=document.createElement('option'); o.value=pre; o.textContent=pre; sel.appendChild(o); }
+      sel.value=pre;
+    }
+  });""", 'preselect в fillDevSelect')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
