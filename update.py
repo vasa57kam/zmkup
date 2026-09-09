@@ -1,112 +1,139 @@
-import os, ast
+import ast, sqlite3
 src = open('swh.py').read()
+def rep(old, new, label):
+    global src
+    if old in src:
+        src = src.replace(old, new, 1); print('  ok:', label)
+    else:
+        print('  ПРОПУСК:', label)
 
-old = "body = _json.dumps({'model': model, 'prompt': prompt, 'stream': False}).encode()"
-new = "body = _json.dumps({'model': model, 'prompt': prompt, 'stream': False, 'num_ctx': 16384}).encode()"
-if old in src:
-    src = src.replace(old, new, 1)
-    print('ok: num_ctx 16384 (больше контекст)')
+conn = sqlite3.connect('switch_replacements.db')
+for tbl, col, typ in (('work_orders', 'order_type', "TEXT DEFAULT 'replace'"),
+                      ('work_orders', 'new_switch_location', 'TEXT'),
+                      ('switch_inventory', 'location', 'TEXT')):
+    try:
+        conn.execute('ALTER TABLE ' + tbl + ' ADD COLUMN ' + col + ' ' + typ)
+        print('  ok: колонка', tbl + '.' + col)
+    except Exception:
+        print('  колонка уже есть:', tbl + '.' + col)
+conn.commit()
+conn.close()
 
-if 'def code_slice' not in src:
-    helper = '''
-def code_slice(a, b):
-    base = os.path.dirname(os.path.abspath(__file__))
-    t = open(os.path.join(base, 'swh.py')).read()
-    i = t.find(a)
-    if i < 0:
-        return ''
-    j = t.find(b, i + 10)
-    if j < 0 or j <= i:
-        j = i + 20000
-    return t[i:j]
+rep('''            <div class="form-group">
+                <label>Номер наряда:</label>
+                <input type="text" id="orderNumber" required>
+            </div>''',
+'''            <div class="form-group">
+                <label>Номер наряда:</label>
+                <input type="text" id="orderNumber" required>
+            </div>
+            <div class="form-group">
+                <label>Тип наряда:</label>
+                <select id="orderType">
+                    <option value="replace">🔄 Замена коммутатора</option>
+                    <option value="new">🆕 Новая установка (без старого)</option>
+                    <option value="service">🔧 Сервис / ремонт</option>
+                </select>
+            </div>''', 'тип наряда в форме')
 
-def routes_list():
-    base = os.path.dirname(os.path.abspath(__file__))
-    t = open(os.path.join(base, 'swh.py')).read()
-    out = []
-    for line in t.split('\\n'):
-        s = line.strip()
-        if s.startswith('@app.route') or s.startswith('def '):
-            out.append(s)
-    return '\\n'.join(out)
+rep('''<input type="number" id="newSwitchPorts" value="28">
+                </div>
+            </div>''',
+'''<input type="number" id="newSwitchPorts" value="28">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Адрес нового коммутатора:</label>
+                <input type="text" id="newSwitchLocation" placeholder="Где стоит / будет стоять">
+            </div>''', 'адрес нового в форме')
 
-SECTS = {
-    'orders': ('INDEX_HTML = ', 'ORDER_HTML = '),
-    'order': ('ORDER_HTML = ', 'PLANNER_HTML = '),
-    'planner': ('PLANNER_HTML = ', 'FDB_HTML = '),
-    'fdb': ('FDB_HTML = ', 'STOCK_HTML = '),
-    'stock': ('STOCK_HTML = ', 'MAP_HTML = '),
-    'map': ('MAP_HTML = ', 'ADMIN_HTML = '),
-    'admin': ('ADMIN_HTML = ', 'def get_order_number'),
+rep("new_switch_ports: document.getElementById('newSwitchPorts').value",
+"""new_switch_ports: document.getElementById('newSwitchPorts').value,
+        order_type: document.getElementById('orderType').value,
+        new_switch_location: document.getElementById('newSwitchLocation').value""", 'поля в orderData')
+
+rep("<p><strong>Адрес:</strong> ${order.old_switch_location || 'Не указан'}</p>",
+"""<p><strong>Тип:</strong> ${order.order_type==='new'?'🆕 новая установка':order.order_type==='service'?'🔧 сервис':' замена'}</p>
+                    <p><strong>Адрес:</strong> ${order.new_switch_location || order.old_switch_location || 'Не указан'}</p>""", 'карточка: тип+адрес')
+
+rep("""        conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'order_id': order_id})""",
+"""        conn.commit()
+    cur.execute('UPDATE work_orders SET order_type=?, new_switch_location=? WHERE id=?',
+        (data.get('order_type', 'replace'), data.get('new_switch_location', ''), order_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'order_id': order_id})""", 'upsert: тип+адрес')
+
+rep("'commands_used','vehicle_needed'):",
+    "'commands_used','vehicle_needed','order_type','new_switch_location'):", 'PUT наряда: новые поля')
+
+rep("<p><strong>Портов:</strong> ${order.new_switch_ports}</p>",
+"""<p><strong>Портов:</strong> ${order.new_switch_ports}</p>
+                        <p><strong>Адрес:</strong> ${order.new_switch_location || '—'}</p>""", 'наряд: адрес нового')
+
+rep('<div class="form-group"><label>Портов:</label><input type="number" id="devicePorts" value="28"></div>',
+'''<div class="form-group"><label>Портов:</label><input type="number" id="devicePorts" value="28"></div>
+            <div class="form-group"><label>Адрес:</label><input type="text" id="deviceLocation" placeholder="Где стоит"></div>''', 'карта: поле адреса')
+
+rep("""    await fetch('/api/network-map',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    closeDeviceModal(); loadMap();""",
+"""    var r=await fetch('/api/network-map',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    var j=await r.json();
+    if(j && j.id){
+      await fetch('/api/network-map/'+j.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:document.getElementById('deviceLocation').value})});
+    }
+    closeDeviceModal(); loadMap();""", 'карта: сохранение адреса')
+
+rep("<div class=\"sw-model\">${dev.model||'—'} · портов: ${n}</div>",
+"""<div class="sw-model">${dev.model||'—'} · портов: ${n}</div>
+        <div class="sw-model">📍 ${dev.location||'адрес не указан'}</div>""", 'панель свитча: адрес')
+
+rep("<small>· ${dev.model||''} · портов: ${dev.total_ports||24}</small>",
+    "<small>· ${dev.model||''} · портов: ${dev.total_ports||24} · 📍 ${dev.location||'—'}</small>", 'список устройств: адрес')
+
+rep("<button class=\"btn btn-primary\" style=\"padding:.3rem .8rem;\" onclick=\"focusDevice(${d.id})\">🎯 Показать</button>",
+"""<button class="btn btn-primary" style="padding:.3rem .8rem;" onclick="focusDevice(${d.id})">🎯 Показать</button>
+            <button class="btn btn-secondary" style="padding:.3rem .8rem;" onclick="setLoc(${d.id})">📍</button>""", 'кнопка правки адреса')
+
+rep("function focusDevice(id){",
+"""function setLoc(id){
+  var dev=devices.find(function(d){return d.id===id;});
+  var v=prompt('Адрес коммутатора:', dev? (dev.location||'') : '');
+  if(v===null) return;
+  fetch('/api/network-map/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:v})}).then(function(){loadMap();});
 }
+function focusDevice(id){""", 'JS setLoc')
 
-'''
-    idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + helper + src[idx:]
-    print('ok: helpers для вырезки кода')
+rep('<div class="form-group"><label>Наряд №:</label><input id="stOrder"></div>',
+'''<div class="form-group"><label>Наряд №:</label><input id="stOrder"></div>
+<div class="form-group"><label>Адрес:</label><input id="stLoc" placeholder="Где стоит"></div>''', 'склад: поле адреса')
 
-old_sig = "def do_ai(prompt, with_diag):"
-new_sig = "def do_ai(prompt, with_diag, payload=None):"
-if old_sig in src:
-    src = src.replace(old_sig, new_sig, 1)
-    print('ok: сигнатура do_ai')
+rep('<thead><tr><th>Модель</th><th>Серийник</th><th>Последний IP</th><th>Наряд</th>',
+    '<thead><tr><th>Модель</th><th>Серийник</th><th>Последний IP</th><th>Адрес</th><th>Наряд</th>', 'склад: шапка')
 
-old_call = "            do_ai(payload.get('prompt', ''), payload.get('with_diag'))"
-new_call = "            do_ai(payload.get('prompt', ''), payload.get('with_diag'), payload)"
-if old_call in src:
-    src = src.replace(old_call, new_call, 1)
-    print('ok: вызов do_ai с payload')
+rep("<td>${r.last_ip||'-'}</td><td>${r.order_number||'-'}</td>",
+    "<td>${r.last_ip||'-'}</td><td>${r.location||'-'}</td><td>${r.order_number||'-'}</td>", 'склад: строка')
 
-k = src.find("    job_log('[ai] нейронка думает...')")
-if k > 0 and 'attach' not in src[k-800:k]:
-    ins = """    attach = (payload or {}).get('attach', '')
-    ctx = ''
-    if attach == 'routes':
-        ctx = routes_list()
-    elif attach in SECTS:
-        ctx = routes_list() + '\\n\\n' + code_slice(*SECTS[attach])
-    if ctx:
-        job_log('[ai] прикрепляю код: ' + attach + ' (' + str(len(ctx)) + ' симв)')
-        prompt = prompt + '\\n\\nРЕЛЕВАНТНЫЙ КОД:\\n' + ctx[:40000]
-    prompt = ('Ты разрабатываешь и проверяешь панель замены коммутаторов swh.py. '
-              'Если нужна правка или новый функционал — дай ГОТОВЫЙ python-патч для swh.py '
-              'между ===PATCH=== и ===END=== (читает swh.py, правит через replace с точными '
-              'якорями, пишет обратно, в конце ast.parse). Пояснения кратко по-русски. ') + prompt
-"""
-    src = src[:k] + ins + src[k:]
-    print('ok: attach кода в do_ai')
+rep("order_number:document.getElementById('stOrder').value,",
+"""order_number:document.getElementById('stOrder').value,
+        location:document.getElementById('stLoc').value,""", 'склад: save location')
 
-old_inp = '<input type="text" id="aiPrompt" placeholder="Напр.: почему не работает кнопка...">'
-if old_inp in src and 'aiAttach' not in src:
-    add = old_inp + '''
-<select id="aiAttach" style="margin-top:.5rem;padding:.5rem;max-width:420px;">
-<option value="routes">Прикрепить: список маршрутов (кратко)</option>
-<option value="orders">Прикрепить: код главной (наряды)</option>
-<option value="order">Прикрепить: код страницы наряда</option>
-<option value="planner">Прикрепить: код планировщика</option>
-<option value="fdb">Прикрепить: код FDB-страницы</option>
-<option value="stock">Прикрепить: код склада</option>
-<option value="map">Прикрепить: код карты сети</option>
-<option value="admin">Прикрепить: код админ-центра</option>
-</select>
-<button class="btn btn-primary" onclick="askAiCode()">🧩 С кодом: разработать / проверить</button>'''
-    src = src.replace(old_inp, add, 1)
-    print('ok: селект и кнопка')
+rep("INSERT INTO switch_inventory (model, serial, last_ip, status, order_number, notes, updated_at) VALUES (?,?,?,?,?,?,?)",
+    "INSERT INTO switch_inventory (model, serial, last_ip, location, status, order_number, notes, updated_at) VALUES (?,?,?,?,?,?,?,?)", 'склад: insert columns')
 
-i = src.find('<script src="/static/admin.js')
-if i >= 0 and 'askAiCode' not in src[i:i+500]:
-    j = src.find('</script>', i) + len('</script>')
-    inline = '''
-<script>
-function askAiCode(){
-  var p=document.getElementById('aiPrompt').value||'Разработай новый функционал для панели';
-  var a=document.getElementById('aiAttach').value;
-  startJob('ai',{prompt:p, with_diag:true, attach:a});
-}
-</script>'''
-    src = src[:j] + inline + src[j:]
-    print('ok: askAiCode')
+rep("(d.get('model',''), d.get('serial',''), d.get('last_ip',''),",
+    "(d.get('model',''), d.get('serial',''), d.get('last_ip',''), d.get('location',''),", 'склад: insert params')
+
+rep("for f in ('model','serial','last_ip','status','order_number','notes'):",
+    "for f in ('model','serial','last_ip','status','order_number','notes','location'):", 'склад: PUT location')
+
+rep("L.append('Адрес: %s' % (o['old_switch_location'] or ''))",
+"""L.append('Адрес: %s' % (o['old_switch_location'] or ''))
+    L.append('Тип наряда: %s' % ('новая установка' if o['order_type'] == 'new' else 'сервис' if o['order_type'] == 'service' else 'замена'))
+    L.append('Адрес нового: %s' % (o['new_switch_location'] or '—'))""", 'отчёт: тип+адрес')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
-print('update.py отработал')
+print('update.py отработал, синтаксис ОК')
