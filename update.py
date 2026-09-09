@@ -1,5 +1,28 @@
-import ast
+import ast, os, glob, shutil
 src = open('swh.py').read()
+
+# 0) САМОРЕМОНТ: если файл бит — откат на последний хороший бэкап
+try:
+    ast.parse(src)
+    print('текущий swh.py цел')
+except Exception as e:
+    print('swh.py бит:', str(e)[:120], '— откатываюсь на бэкап')
+    done = False
+    for c in sorted(glob.glob('backups/swh_*.py'), reverse=True):
+        t = open(c).read()
+        try:
+            ast.parse(t)
+        except Exception:
+            continue
+        if 'def admin_apply' in t and 'ADMIN_PIN' in t:
+            shutil.copy(c, 'swh.py')
+            src = t
+            print('ВОССТАНОВЛЕНО из', c)
+            done = True
+            break
+    if not done:
+        raise SystemExit('нет хорошего бэкапа!')
+
 def rep(old, new, label):
     global src
     if old in src:
@@ -18,7 +41,7 @@ def slice_replace(start_marker, end_marker, new_body, label):
     src = src[:i] + new_body + src[j:]
     print('  ok:', label)
 
-# 1) Нормализатор голосового ввода + умная нарезка контекста
+# 1) Нормализатор голосового ввода + умная нарезка
 if 'def clarify_wish' not in src:
     helper = '''
 def clarify_wish(wish):
@@ -58,13 +81,13 @@ def smart_ctx(wish):
     src = src[:idx] + helper + src[idx:]
     print('ok: clarify_wish + smart_ctx')
 
-# 2) _ollama_gen: настраиваемый таймаут
+# 2) Таймауты ollama
 rep('def _ollama_gen(prompt, ctx=16384):', 'def _ollama_gen(prompt, ctx=16384, timeout=900):', 'таймаут-параметр')
 rep('r = urllib.request.urlopen(rq, timeout=1800)', 'r = urllib.request.urlopen(rq, timeout=timeout)', 'urlopen с timeout')
 
-# 3) do_ai: умный контекст + нормализация + фолбэк при таймауте
+# 3) do_ai: умный контекст + фолбэк при таймауте (без ошибок отступов!)
 slice_replace("    attach = (payload or {}).get('attach', '')",
-    "    job_log('[ai] нейронка думает...')",
+"    job_log('[ai] нейронка думает...')",
 """    wish0 = (payload or {}).get('prompt', '')
     clear = clarify_wish(wish0)
     job_log('[ai] задача после нормализации: ' + clear[:150])
@@ -90,20 +113,20 @@ slice_replace("    attach = (payload or {}).get('attach', '')",
               '\\n\\nРЕЛЕВАНТНЫЙ КОД:\\n' + ctx)
     try:
         text = _ollama_gen(prompt, ctxsize)
-    except Exception as e:
+    except Exception:
         job_log('[ai] таймаут на большом контексте — переход на умную нарезку')
         ctx = smart_ctx(clear)
         prompt = prompt + '\\n\\nКОД (умная нарезка):\\n' + ctx
         text = _ollama_gen(prompt, 12000, 1200)
-    """, 'do_ai: умный контекст')
+""", 'do_ai: умный контекст')
 
 rep("    text = _ollama_gen(prompt, 32768 if attach == 'all' else 16384)",
-    "    text = text if 'text' in dir() else _ollama_gen(prompt, ctxsize)", 'страховка вызова')
+    "    # text уже получен выше", 'убрать двойной вызов')
 
-# 4) Автономка: до 3 попыток, умный контекст, нормализация
+# 4) Автономка до 3 попыток
 i = src.find('def do_autonomous(payload):')
 j = src.find('def passport(', i) if i >= 0 else -1
-if i >= 0 and j > i:
+if i >= 0 and j > i and 'попытка ' not in src[i:j]:
     new_auto = '''def do_autonomous(payload):
     wish = (payload or {}).get('prompt', '') or ''
     job_log('[auto] желание: ' + wish[:200])
@@ -159,8 +182,10 @@ if i >= 0 and j > i:
 '''
     src = src[:i] + new_auto + src[j:]
     print('ok: автономка до 3 попыток')
+else:
+    print('автономка уже обновлена или не найдена')
 
-# 5) UI: умный выбор по умолчанию
+# 5) UI: умный режим по умолчанию
 rep('<option value="all">📦 Прикрепить: ВСЁ (весь код + диагностика)</option>',
     '<option value="smart" selected>🧠 Прикрепить: умное (релевантное задаче)</option>\n<option value="all">📦 Прикрепить: ВСЁ (долго думает, возможен таймаут)</option>',
     'умный режим по умолчанию')
