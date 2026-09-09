@@ -7,91 +7,171 @@ def rep(old, new, label):
     else:
         print('  ПРОПУСК:', label)
 
-# 1) Маршрут паспорта (правильная проверка: по функции, не по строке)
-if 'def passport(order_id):' not in src:
-    PASS = '''PASS_HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<title>Паспорт наряда {{ o.order_number }}</title>
-<style>
-body{font-family:Arial,sans-serif;font-size:12px;color:#000;margin:15mm 15mm;}
-h1{font-size:18px;margin:0 0 6px;} h2{font-size:14px;margin:14px 0 6px;}
-table{width:100%;border-collapse:collapse;margin:6px 0;}
-td,th{border:1px solid #000;padding:4px 6px;font-size:11px;text-align:left;vertical-align:top;}
-.noprint{margin:0 0 12px;} @media print{.noprint{display:none;}}
-</style></head><body>
-<div class="noprint">
-<button onclick="window.print()" style="padding:8px 16px;font-size:14px;cursor:pointer;">🖨️ Печать</button>
-<a href="/order/{{ o.id }}">← К наряду</a>
-</div>
-<h1>ПАСПОРТ НАРЯДА № {{ o.order_number }}</h1>
-<p>Дата: {{ o.created_at }} | Тип: {{ 'новая установка' if o.order_type=='new' else 'сервис' if o.order_type=='service' else 'замена коммутатора' }} | Статус: {{ o.status }}</p>
-<h2>1. Оборудование</h2>
-<table>
-<tr><th></th><th>IP</th><th>Модель</th><th>Портов</th><th>Адрес</th></tr>
-<tr><td>Старый</td><td>{{ o.old_switch_ip or '—' }}</td><td>{{ o.old_switch_model or '—' }}</td><td>{{ o.old_switch_ports }}</td><td>{{ o.old_switch_location or '—' }}</td></tr>
-<tr><td>Новый</td><td>{{ o.new_switch_ip or '—' }}</td><td>{{ o.new_switch_model or '—' }}</td><td>{{ o.new_switch_ports }}</td><td>{{ o.new_switch_location or '—' }}</td></tr>
-</table>
-<h2>2. Подключения</h2>
-<table><tr><th>Тип</th><th>Порт (стар)</th><th>Порт (нов)</th><th>Устройство</th><th>Адрес устройства</th><th>Порт там</th></tr>
-{% for l in links %}<tr><td>{{ 'UPLINK' if l.link_type=='uplink' else 'downlink' }}</td><td>{{ l.old_port }}</td><td>{{ l.new_port or '—' }}</td><td>{{ l.upstream_device }}</td><td>{{ dev_loc(l.upstream_device) or '—' }}</td><td>{{ l.upstream_port }}</td></tr>{% endfor %}
-</table>
-<h2>3. Абоненты ({{ subs|length }})</h2>
-{% if subs %}<table><tr><th>Порт (стар)</th><th>Порт (нов)</th><th>Абонент</th><th>Адрес</th><th>VLAN</th><th>MAC</th></tr>
-{% for s in subs %}<tr><td>{{ s.old_port }}</td><td>{{ s.new_port or '—' }}</td><td>{{ s.subscriber_name or '' }}</td><td>{{ s.address or '' }}</td><td>{{ s.vlan or '' }}</td><td>{{ s.mac_address or '' }}</td></tr>{% endfor %}
-</table>{% else %}<p>Абонентов нет.</p>{% endif %}
-<h2>4. Контроль FDB</h2>
-<p>Записей ДО: {{ oldn }} | ПОСЛЕ: {{ newn }} | Потеряно MAC: {{ lost|length }}</p>
-{% if lost %}<table><tr><th>MAC</th><th>Порт</th><th>Абонент</th></tr>{% for m in lost %}<tr><td>{{ m[0] }}</td><td>{{ m[1] }}</td><td>{{ m[2] }}</td></tr>{% endfor %}</table>{% endif %}
-<h2>5. Чек-лист работ</h2>
-<table>{% for s in steps %}<tr><td style="width:10px;text-align:center;">{{ '☑' if (s.done or fl.get(loop.index0)) else '☐' }}</td><td>{{ s.step_text }}</td></tr>{% endfor %}</table>
-{% if o.commands_used %}<h2>6. Использованные команды</h2><p>{{ o.commands_used }}</p><p>Нужна была машина: {{ 'ДА' if o.vehicle_needed else 'нет' }}</p>{% endif %}
-<h2>Подписи</h2>
-<table><tr><td style="height:60px;">Работу выполнил: ____________________</td><td style="height:60px;">Принял: ____________________</td></tr></table>
-</body></html>"""
+def slice_replace(start_marker, end_marker, new_body, label):
+    global src
+    i = src.find(start_marker)
+    if i < 0:
+        print('  ПРОПУСК (старт):', label); return
+    j = src.find(end_marker, i + len(start_marker))
+    if j < 0:
+        print('  ПРОПУСК (конец):', label); return
+    src = src[:i] + new_body + src[j:]
+    print('  ok:', label)
 
-@app.route('/passport/<int:order_id>')
-def passport(order_id):
-    conn = get_db()
-    o = conn.execute('SELECT * FROM work_orders WHERE id=?', (order_id,)).fetchone()
-    if not o:
-        conn.close()
-        return 'Наряд не найден', 404
-    links = conn.execute('SELECT * FROM links WHERE order_id=? ORDER BY link_type, old_port', (order_id,)).fetchall()
-    subs = conn.execute('SELECT * FROM subscribers WHERE order_id=? ORDER BY old_port', (order_id,)).fetchall()
-    steps = conn.execute('SELECT * FROM order_steps WHERE order_id=? ORDER BY pos', (order_id,)).fetchall()
-    oldf = conn.execute("SELECT * FROM fdb_tables WHERE order_id=? AND switch_type='old'", (order_id,)).fetchall()
-    newf = conn.execute("SELECT * FROM fdb_tables WHERE order_id=? AND switch_type='new'", (order_id,)).fetchall()
-    conn.close()
-    fl = auto_flags(order_id)
-    om = {r['mac_address'].upper(): r for r in oldf if r['mac_address']}
-    nm = {r['mac_address'].upper(): r for r in newf if r['mac_address']}
-    lost = [(m, om[m]['port'], om[m]['subscriber'] or '') for m in sorted(set(om) - set(nm))]
-    return render_template_string(PASS_HTML, o=o, links=links, subs=subs,
-        steps=steps, fl=fl, oldn=len(oldf), newn=len(newf), lost=lost, dev_loc=dev_loc)
+# 1) Нормализатор голосового ввода + умная нарезка контекста
+if 'def clarify_wish' not in src:
+    helper = '''
+def clarify_wish(wish):
+    p = ('Ты нормализатор голосового ввода: задачи диктуются голосом для разработчика панели swh.py '
+         '(замена коммутаторов: наряды, планировщик портов, FDB-таблицы, карта сети, склад, отчёты, паспорт наряда, админ-центр). '
+         'Перепиши диктовку в чёткое техническое задание 1-3 предложения, исправь ошибки распознавания по смыслу '
+         '(напр. "паспорт не найден" -> "кнопка Паспорт отдаёт 404", "аплинк" -> "uplink"). '
+         'Ответь ТОЛЬКО текстом задания.\\nДиктовка: ' + wish[:1000])
+    try:
+        r = _ollama_gen(p, 4096, 300).strip()
+        return (r or wish)[:1000]
+    except Exception:
+        return wish
 
+def smart_ctx(wish):
+    w = (wish or '').lower()
+    keys = []
+    if 'паспорт' in w or 'печать' in w or 'отчёт' in w or 'отчет' in w: keys += ['order', 'planner']
+    if 'наряд' in w or 'закрыть' in w or 'редакт' in w or 'создать' in w: keys += ['orders', 'order']
+    if 'план' in w or 'uplink' in w or 'аплинк' in w or 'downlink' in w or 'даунлинк' in w or 'порт' in w: keys += ['planner']
+    if 'fdb' in w or 'фдб' in w or 'мак' in w or 'mac' in w: keys += ['fdb']
+    if 'склад' in w or 'статус' in w or 'сбро' in w: keys += ['stock']
+    if 'карт' in w or 'адрес' in w or 'устройств' in w or 'свитч' in w: keys += ['map']
+    if 'команд' in w or 'справочник' in w: keys += ['admin']
+    if 'админ' in w or 'обновлен' in w or 'патч' in w or 'нейрон' in w: keys += ['admin']
+    if not keys: keys = ['orders', 'order', 'planner']
+    seen = set()
+    parts = [routes_list()]
+    for k in keys:
+        if k in seen or k not in SECTS: continue
+        seen.add(k)
+        parts.append(code_slice(*SECTS[k]))
+    return '\\n\\n'.join(p for p in parts if p)[:40000]
 
 '''
     idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + PASS + src[idx:]
-    print('ok: маршрут /passport добавлен')
-else:
-    print('маршрут паспорта уже есть')
+    src = src[:idx] + helper + src[idx:]
+    print('ok: clarify_wish + smart_ctx')
 
-# 2) Автономка: строгий повтор, если нейронка словила трусость
-rep("""    code = _extract_patch(text)
-    if not code.strip():
-        JOB['result'] = {'ok': True, 'rc': 0, 'out': 'Нейронка ответила без патча (см. ответ).', 'ai': text[:6000]}
-        log_change('ai', 'ответ без патча: ' + text[:150].replace('\\n', ' '))
-        return""",
-"""    code = _extract_patch(text)
-    if not code.strip():
-        job_log('[auto] патча нет — строгий повтор...')
-        text = _ollama_gen(prompt + '\\n\\nВАЖНО: ты ОБЯЗАН выдать готовый python-патч между ===PATCH=== и ===END===. Объяснения вместо кода ЗАПРЕЩЕНЫ.', 32768)
+# 2) _ollama_gen: настраиваемый таймаут
+rep('def _ollama_gen(prompt, ctx=16384):', 'def _ollama_gen(prompt, ctx=16384, timeout=900):', 'таймаут-параметр')
+rep('r = urllib.request.urlopen(rq, timeout=1800)', 'r = urllib.request.urlopen(rq, timeout=timeout)', 'urlopen с timeout')
+
+# 3) do_ai: умный контекст + нормализация + фолбэк при таймауте
+slice_replace("    attach = (payload or {}).get('attach', '')",
+    "    job_log('[ai] нейронка думает...')",
+"""    wish0 = (payload or {}).get('prompt', '')
+    clear = clarify_wish(wish0)
+    job_log('[ai] задача после нормализации: ' + clear[:150])
+    attach = (payload or {}).get('attach', 'smart')
+    if attach == 'all':
+        ctx = routes_list() + '\\n\\nПОЛНЫЙ КОД (первые 60000 символов):\\n' + open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'swh.py')).read()[:60000]
+        ctxsize = 32768
+    elif attach == 'routes':
+        ctx = routes_list()
+        ctxsize = 8192
+    elif attach in SECTS:
+        ctx = routes_list() + '\\n\\n' + code_slice(*SECTS[attach])
+        ctxsize = 16384
+    else:
+        ctx = smart_ctx(clear)
+        ctxsize = 16384
+    job_log('[ai] прикрепляю код: ' + attach + ' (' + str(len(ctx)) + ' симв)')
+    prompt = ('Ты разработчик и аудитор панели swh.py (Flask+SQLite, JS внутри шаблонов). '
+              'Если нужна правка или функция — дай ГОТОВЫЙ python-патч между ===PATCH=== и ===END=== '
+              '(читает swh.py, правит через replace с точными якорями, пишет обратно, в конце ast.parse). '
+              'Пояснения кратко по-русски.\\nЗАДАЧА: ' + clear +
+              '\\n\\nЖУРНАЛ ИЗМЕНЕНИЙ:\\n' + changelog_text() +
+              '\\n\\nРЕЛЕВАНТНЫЙ КОД:\\n' + ctx)
+    try:
+        text = _ollama_gen(prompt, ctxsize)
+    except Exception as e:
+        job_log('[ai] таймаут на большом контексте — переход на умную нарезку')
+        ctx = smart_ctx(clear)
+        prompt = prompt + '\\n\\nКОД (умная нарезка):\\n' + ctx
+        text = _ollama_gen(prompt, 12000, 1200)
+    """, 'do_ai: умный контекст')
+
+rep("    text = _ollama_gen(prompt, 32768 if attach == 'all' else 16384)",
+    "    text = text if 'text' in dir() else _ollama_gen(prompt, ctxsize)", 'страховка вызова')
+
+# 4) Автономка: до 3 попыток, умный контекст, нормализация
+i = src.find('def do_autonomous(payload):')
+j = src.find('def passport(', i) if i >= 0 else -1
+if i >= 0 and j > i:
+    new_auto = '''def do_autonomous(payload):
+    wish = (payload or {}).get('prompt', '') or ''
+    job_log('[auto] желание: ' + wish[:200])
+    clear = clarify_wish(wish)
+    job_log('[auto] после нормализации: ' + clear[:200])
+    log_change('user', 'желание: ' + wish[:150])
+    base = os.path.dirname(os.path.abspath(__file__))
+    ctx = smart_ctx(clear)
+    prompt = ('Ты автономный разработчик панели swh.py (Flask+SQLite, JS внутри шаблонов). '
+              'Правила: правь ТОЛЬКО через replace с точными якорями из приложенного кода; '
+              'НЕ выдумывай библиотеки (никакой SQLAlchemy); не трогай то, что не просили; '
+              'в конце ast.parse; между ===PATCH=== и ===END=== — ТОЛЬКО код патча. '
+              'Если явно невыполнимо — ответь текстом.\\n'
+              'ЗАДАЧА: ' + clear +
+              '\\n\\nЖУРНАЛ ИЗМЕНЕНИЙ:\\n' + changelog_text() +
+              '\\n\\nДИАГНОСТИКА:\\n' + _diag_text()[:3000] +
+              '\\n\\nРЕЛЕВАНТНЫЙ КОД:\\n' + ctx)
+    last_gate = ''
+    code = ''
+    text = ''
+    for attempt in (1, 2, 3):
+        job_log('[auto] попытка ' + str(attempt) + ': нейронка думает...')
+        extra = ('\\n\\nТвой прошлый патч НЕ прошёл sandbox: ' + last_gate[:1200] + '\\nИсправь и дай исправленный патч.') if last_gate else ''
+        text = _ollama_gen(prompt + extra, 16384, 1200)
         code = _extract_patch(text)
-    if not code.strip():
-        JOB['result'] = {'ok': True, 'rc': 0, 'out': 'Нейронка не дала патч даже после строгого требования (см. ответ).', 'ai': text[:6000]}
-        log_change('ai', 'ответ без патча: ' + text[:150].replace('\\n', ' '))
-        return""", 'строгий повтор автономки')
+        if not code.strip():
+            job_log('[auto] патча нет — строгий повтор...')
+            text = _ollama_gen(prompt + '\\n\\nВАЖНО: ты ОБЯЗАН выдать готовый python-патч между ===PATCH=== и ===END===. Объяснения вместо кода ЗАПРЕЩЕНЫ.', 16384, 1200)
+            code = _extract_patch(text)
+        if not code.strip():
+            JOB['result'] = {'ok': True, 'rc': 0, 'out': 'Нейронка не дала патч (см. ответ).', 'ai': text[:6000]}
+            log_change('ai', 'без патча: ' + text[:150].replace('\\n', ' '))
+            return
+        ok, gate = sandbox_check(code)
+        job_log('[auto] sandbox: ' + gate[:150])
+        if ok:
+            job_log('[auto] применяю к боевому файлу...')
+            rc, out = _run_patch_code(code, 'ai-auto')
+            JOB['result'] = {'ok': rc == 0, 'rc': rc,
+                'out': 'Sandbox OK (попытка ' + str(attempt) + '). Боевой: rc=' + str(rc) + '\\n' + out[-2000:],
+                'ai': text[:1500]}
+            log_change('ai-auto', 'патч применён (попытка ' + str(attempt) + '), rc=' + str(rc) + ' | ' + wish[:100])
+            if rc == 0:
+                _restart_later()
+            return
+        last_gate = gate
+    open(os.path.join(base, 'pending_patch.py'), 'w').write(code)
+    JOB['result'] = {'ok': False, 'rc': -7,
+        'out': '3 попытки, sandbox не пройден. Патч в pending_patch.py. НУЖЕН МАСТЕР.\\n' + last_gate[:1500],
+        'ai': text[:3000]}
+    log_change('ai', 'НУЖЕН МАСТЕР: ' + last_gate[:200].replace('\\n', ' ') + ' | ' + wish[:100])
+
+'''
+    src = src[:i] + new_auto + src[j:]
+    print('ok: автономка до 3 попыток')
+
+# 5) UI: умный выбор по умолчанию
+rep('<option value="all">📦 Прикрепить: ВСЁ (весь код + диагностика)</option>',
+    '<option value="smart" selected>🧠 Прикрепить: умное (релевантное задаче)</option>\n<option value="all">📦 Прикрепить: ВСЁ (долго думает, возможен таймаут)</option>',
+    'умный режим по умолчанию')
+ajs_path = os.path.join('static', 'admin.js')
+if os.path.exists(ajs_path):
+    ajs = open(ajs_path).read()
+    if "attach:'all'" in ajs:
+        ajs = ajs.replace("startJob('ai',{prompt:p, with_diag:withDiag, attach:'all'});",
+                          "startJob('ai',{prompt:p, with_diag:withDiag, attach:(document.getElementById('aiAttach')||{value:'smart'}).value});", 1)
+        open(ajs_path, 'w').write(ajs)
+        print('ok: admin.js берёт режим из селекта')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
