@@ -1,4 +1,4 @@
-import ast, os
+import ast
 src = open('swh.py').read()
 def rep(old, new, label):
     global src
@@ -7,61 +7,133 @@ def rep(old, new, label):
     else:
         print('  ПРОПУСК:', label)
 
-ajs_path = os.path.join('static', 'common.js')
-ajs = open(ajs_path).read() if os.path.exists(ajs_path) else ''
+# 1) Паспорт: вернуть, если снова съеден
+if 'def passport(order_id):' not in src:
+    PASS = '''PASS_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Паспорт наряда {{ o.order_number }}</title>
+<style>
+body{font-family:Arial,sans-serif;font-size:12px;color:#000;margin:15mm 15mm;}
+h1{font-size:18px;margin:0 0 6px;} h2{font-size:14px;margin:14px 0 6px;}
+table{width:100%;border-collapse:collapse;margin:6px 0;}
+td,th{border:1px solid #000;padding:4px 6px;font-size:11px;text-align:left;vertical-align:top;}
+.noprint{margin:0 0 12px;} @media print{.noprint{display:none;}}
+</style></head><body>
+<div class="noprint">
+<button onclick="window.print()" style="padding:8px 16px;font-size:14px;cursor:pointer;">🖨️ Печать</button>
+<a href="/order/{{ o.id }}">← К наряду</a>
+</div>
+<h1>ПАСПОРТ НАРЯДА № {{ o.order_number }}</h1>
+<p>Дата: {{ o.created_at }} | Тип: {{ o.order_type or 'replace' }} | Статус: {{ o.status }}</p>
+<h2>1. Оборудование</h2>
+<table>
+<tr><th></th><th>IP</th><th>Модель</th><th>Портов</th><th>Адрес</th></tr>
+<tr><td>Старый</td><td>{{ o.old_switch_ip or '—' }}</td><td>{{ o.old_switch_model or '—' }}</td><td>{{ o.old_switch_ports }}</td><td>{{ o.old_switch_location or '—' }}</td></tr>
+<tr><td>Новый</td><td>{{ o.new_switch_ip or '—' }}</td><td>{{ o.new_switch_model or '—' }}</td><td>{{ o.new_switch_ports }}</td><td>{{ o.new_switch_location or '—' }}</td></tr>
+</table>
+<h2>2. Подключения</h2>
+<table><tr><th>Тип</th><th>Порт (стар)</th><th>Порт (нов)</th><th>Устройство</th><th>Порт там</th></tr>
+{% for l in links %}<tr><td>{{ l.link_type }}</td><td>{{ l.old_port }}</td><td>{{ l.new_port or '—' }}</td><td>{{ l.upstream_device }}</td><td>{{ l.upstream_port }}</td></tr>{% endfor %}
+</table>
+<h2>3. Камеры</h2>
+{% if cams %}<table><tr><th></th><th>Модель</th><th>Серийник</th><th>IP/ID</th><th>Логин</th><th>Свитч:порт</th><th>RTSP</th><th>Зона</th></tr>
+{% for c in cams %}<tr><td>{{ 'СТАР' if c.side=='old' else 'НОВ' }}</td><td>{{ c.model or '—' }}</td><td>{{ c.serial or '—' }}</td><td>{{ c.ip or '—' }}</td><td>{{ c.login or '—' }}</td><td>{{ (c.switch_name or '—') ~ ':' ~ (c.switch_port or '—') }}</td><td>{{ c.rtsp or '—' }}</td><td>{{ c.zone or '—' }}</td></tr>{% endfor %}
+</table>{% else %}<p>Камер нет.</p>{% endif %}
+<h2>4. Абоненты ({{ subs|length }})</h2>
+{% if subs %}<table><tr><th>Порт (стар)</th><th>Порт (нов)</th><th>Абонент</th><th>Адрес</th><th>VLAN</th><th>MAC</th></tr>
+{% for s in subs %}<tr><td>{{ s.old_port }}</td><td>{{ s.new_port or '—' }}</td><td>{{ s.subscriber_name or '' }}</td><td>{{ s.address or '' }}</td><td>{{ s.vlan or '' }}</td><td>{{ s.mac_address or '' }}</td></tr>{% endfor %}
+</table>{% else %}<p>Абонентов нет.</p>{% endif %}
+<h2>5. Контроль FDB</h2>
+<p>Записей ДО: {{ oldn }} | ПОСЛЕ: {{ newn }} | Потеряно MAC: {{ lost|length }}</p>
+<h2>6. Чек-лист работ</h2>
+<table>{% for s in steps %}<tr><td style="width:10px;text-align:center;">{{ '☑' if (s.done or fl.get(loop.index0)) else '☐' }}</td><td>{{ s.step_text }}</td></tr>{% endfor %}</table>
+<h2>Подписи</h2>
+<table><tr><td style="height:60px;">Работу выполнил: ____________________</td><td style="height:60px;">Принял: ____________________</td></tr></table>
+</body></html>"""
 
-# 1) Кликабельный IP в карточке камеры + функции удаления/чистки
-if 'openIp' not in ajs:
-    ajs = ajs.replace("""<input class="camIp" value="'+(c.ip||'')+'"></div>'""",
-"""<input class="camIp" value="'+(c.ip||'')+'"> <button class="btn btn-secondary" style="padding:2px 6px;" onclick="openIp('+c.id+')" title="Открыть веб-интерфейс камеры">🔗</button></div>'""", 1)
-    ajs += '''
-function openIp(id){
-  var d=document.querySelector('[data-cam="'+id+'"]');
-  var u=d && d.querySelector('.camIp').value;
-  if(u){ window.open('http://'+u,'_blank'); } else { alert('IP не указан'); }
-}
-function delCamPlan(id){
-  if(!confirm('Удалить камеру?')) return;
-  fetch('/api/cameras/'+id,{method:'DELETE'}).then(function(){
-    if(typeof renderCamPlan==='function'){ renderCamPlan(); }
-    if(typeof loadCams==='function'){ loadCams(); }
-  });
-}
-function cleanEmptyCams(){
-  fetch('/api/cameras?order_id='+orderId).then(function(r){return r.json();}).then(function(rows){
-    var empty=rows.filter(function(c){
-      return !(c.model||'').trim() && !(c.ip||'').trim() && !(c.serial||'').trim() && !(c.login||'').trim() && !(c.rtsp||'').trim();
-    });
-    if(!empty.length){ alert('Пустых камер нет'); return; }
-    if(!confirm('Удалить пустых камер: '+empty.length+'?')) return;
-    Promise.all(empty.map(function(c){ return fetch('/api/cameras/'+c.id,{method:'DELETE'}); }))
-      .then(function(){
-        if(typeof renderCamPlan==='function'){ renderCamPlan(); }
-        if(typeof loadCams==='function'){ loadCams(); }
-      });
-  });
-}
+@app.route('/passport/<int:order_id>')
+def passport(order_id):
+    conn = get_db()
+    o = conn.execute('SELECT * FROM work_orders WHERE id=?', (order_id,)).fetchone()
+    if not o:
+        conn.close()
+        return 'Наряд не найден', 404
+    links = conn.execute('SELECT * FROM links WHERE order_id=? ORDER BY link_type, old_port', (order_id,)).fetchall()
+    subs = conn.execute('SELECT * FROM subscribers WHERE order_id=? ORDER BY old_port', (order_id,)).fetchall()
+    steps = conn.execute('SELECT * FROM order_steps WHERE order_id=? ORDER BY pos', (order_id,)).fetchall()
+    try:
+        cams = conn.execute('SELECT * FROM cameras WHERE order_id=? ORDER BY side', (order_id,)).fetchall()
+    except Exception:
+        cams = []
+    oldf = conn.execute("SELECT * FROM fdb_tables WHERE order_id=? AND switch_type='old'", (order_id,)).fetchall()
+    newf = conn.execute("SELECT * FROM fdb_tables WHERE order_id=? AND switch_type='new'", (order_id,)).fetchall()
+    conn.close()
+    fl = auto_flags(order_id)
+    om = {r['mac_address'].upper(): r for r in oldf if r['mac_address']}
+    nm = {r['mac_address'].upper(): r for r in newf if r['mac_address']}
+    lost = [(m, om[m]['port'], om[m]['subscriber'] or '') for m in sorted(set(om) - set(nm))]
+    return render_template_string(PASS_HTML, o=o, links=links, subs=subs, cams=cams,
+        steps=steps, fl=fl, oldn=len(oldf), newn=len(newf), lost=lost)
+
+
 '''
-    open(ajs_path, 'w').write(ajs)
-    print('ok: openIp + удаление камер')
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + PASS + src[idx:]
+    print('ok: паспорт возвращён')
 else:
-    print('openIp уже есть')
+    print('паспорт на месте')
 
-# 2) План камер: кликабельный IP + 🗑 у каждой карточки + кнопка чистки
-rep("""      h+='<b>📹 '+(c.side==='old'?'СТАРНАЯ':'НОВАЯ')+' камера:</b> '+(c.model||'—')+' | IP/ID: '+(c.ip||'без IP')+' | логин: '+(c.login||'—');""",
-"""      h+='<button class="btn btn-danger" style="padding:1px 6px;margin-right:.4rem;" onclick="delCamPlan('+c.id+')" title="Удалить камеру">🗑</button>';
-      h+='<b>📹 '+(c.side==='old'?'СТАРНАЯ':'НОВАЯ')+' камера:</b> '+(c.model||'—')+' | IP/ID: '+(c.ip?'<a href="http://'+c.ip+'" target="_blank">'+c.ip+'</a>':'без IP')+' | логин: '+(c.login||'—');""",
-    'план: IP-ссылка и 🗑')
+# 2) Песочница: дымовые тесты ВСЕГДА с паспортом/нарядом/планировщиком (замена строки urls целиком)
+i = src.find("urls = ['/'")
+if i >= 0:
+    j = src.find(']\n', i)
+    if j > 0:
+        new_urls = """import sqlite3 as _sq
+_oid = 1
+try:
+    _c = _sq.connect('switch_replacements.db')
+    _r = _c.execute('SELECT id FROM work_orders ORDER BY id LIMIT 1').fetchone()
+    _c.close()
+    if _r:
+        _oid = _r[0]
+except Exception:
+    pass
+urls = ['/', '/map', '/commands', '/admin', '/stock', '/api/orders', '/api/inventory',
+        '/api/network-map', '/api/commands', '/api/cameras',
+        '/passport/%d' % _oid, '/order/%d' % _oid, '/planner/%d' % _oid]
+"""
+        src = src[:i] + new_urls + src[j+2:]
+        print('ok: дымовые тесты с паспортом')
+else:
+    print('ПРОПУСК: urls песочницы')
 
-rep("""    box.innerHTML=h;
-  });
-}
-function loadSubscribers() {""",
-"""    h='<button class="btn btn-secondary" style="margin-bottom:.5rem;" onclick="cleanEmptyCams()">🧹 Убрать пустые камеры</button>'+h;
-    box.innerHTML=h;
-  });
-}
-function loadSubscribers() {""", 'план: кнопка чистки пустых')
+# 3) Диагностика: пункт routes_missing (видят и вы, и нейронка)
+if 'routes_missing' not in src:
+    rep("'tables': tables,",
+"""'tables': tables,
+            'routes_missing': [e for e in ('/', '/map', '/commands', '/admin', '/stock',
+                '/order/<int:order_id>', '/planner/<int:order_id>', '/fdb/<int:order_id>',
+                '/passport/<int:order_id>', '/api/admin/job', '/api/admin/apply',
+                '/api/admin/ghupdate', '/api/admin/selfheal', '/api/cameras', '/api/changelog')
+                if e not in set(str(r) for r in app.url_map.iter_rules())],""", 'диагностика: routes_missing')
+
+# 4) Аудит: нейронка обязана проверять routes_missing и восстанавливать
+rep('Проанализируй прикреплённый код и диагностику, выяви все обнаруженные баги и несоответствия по пунктам,',
+    'Проанализируй прикреплённый код и диагностику. ПЕРВЫМ делом проверь пункт routes_missing в диагностике — отсутствующие маршруты wajib восстановить. Затем выяви все баги и несоответствия по пунктам,',
+    'аудит: приоритет routes_missing')
+
+# 5) Сторож при старте: пишет в журнал, если ключевые функции съедены
+if 'watchdog' not in src:
+    rep("if __name__ == '__main__':\n    init_db()",
+"""if __name__ == '__main__':
+    try:
+        _me = open(os.path.abspath(__file__)).read()
+        _miss = [m for m in ('def passport(order_id):', 'def admin_job', 'def cameras_api', 'def commands_page') if m not in _me]
+        if _miss:
+            log_change('watchdog', 'В КОДЕ ОТСУТСТВУЕТ: ' + ', '.join(_miss))
+    except Exception:
+        pass
+    init_db()""", 'сторож при старте')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
