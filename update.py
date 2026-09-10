@@ -7,11 +7,49 @@ def rep(old, new, label):
     else:
         print('  ПРОПУСК:', label)
 
-# 1) Паспорт: вернуть, если снова съеден
+# 0) Проверка: патч вообще про swh.py?
+if 'def patch_looks_valid' not in src:
+    helper = '''
+def patch_looks_valid(code):
+    return ('swh.py' in code) and ('replace(' in code or 'write(' in code)
+
+'''
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + helper + src[idx:]
+    print('ok: patch_looks_valid')
+
+# 1) Кнопка ⚡ / «Применить патч»: сначала песочница и валидность, потом применение
+rep("""    make_backup()
+    rc, out = _run_patch_code(code, 'apply')""",
+"""    if not patch_looks_valid(code):
+        return jsonify({'rc': -8, 'out': 'ОТКЛОНЕНО: патч не модифицирует swh.py (похоже на посторонний код). Применение невозможно.'})
+    ok, gate = sandbox_check(code)
+    if not ok:
+        return jsonify({'rc': -8, 'out': 'ОТКЛОНЕНО песочницей (файл не изменён):\\n' + gate[:1500]})
+    make_backup()
+    rc, out = _run_patch_code(code, 'apply')""", 'apply: гейт песочницы')
+
+# 2) Автономка и строгий повтор: отсев посторонних «патчей»
+rep("""        ok, gate = sandbox_check(code)
+        job_log('[auto] sandbox: ' + gate[:150])""",
+"""        if not patch_looks_valid(code):
+            last_gate = 'патч не модифицирует swh.py (посторонний код)'
+            job_log('[auto] отсев: ' + last_gate)
+            continue
+        ok, gate = sandbox_check(code)
+        job_log('[auto] sandbox: ' + gate[:150])""", 'автономка: отсев мусора')
+
+rep("""    if (payload or {}).get('want_patch') and not _extract_patch(text).strip():""",
+"""    code_ai = _extract_patch(text)
+    if code_ai.strip() and not patch_looks_valid(code_ai):
+        job_log('[ai] отсев: патч не про swh.py — строгий повтор')
+        text = _ollama_gen(prompt + '\\n\\nТвой прошлый ответ содержал НЕ патч для swh.py, а постороннюю программу. Выдай патч, который читает swh.py, правит через replace и записывает обратно.', 16384, 900)
+    if (payload or {}).get('want_patch') and not _extract_patch(text).strip():""", 'ai: отсев мусора')
+
+# 3) Паспорт + routes_missing + сторож (если прошлое обновление не доехало)
 if 'def passport(order_id):' not in src:
     PASS = '''PASS_HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<title>Паспорт наряда {{ o.order_number }}</title>
+<html><head><meta charset="utf-8"><title>Паспорт наряда {{ o.order_number }}</title>
 <style>
 body{font-family:Arial,sans-serif;font-size:12px;color:#000;margin:15mm 15mm;}
 h1{font-size:18px;margin:0 0 6px;} h2{font-size:14px;margin:14px 0 6px;}
@@ -19,30 +57,24 @@ table{width:100%;border-collapse:collapse;margin:6px 0;}
 td,th{border:1px solid #000;padding:4px 6px;font-size:11px;text-align:left;vertical-align:top;}
 .noprint{margin:0 0 12px;} @media print{.noprint{display:none;}}
 </style></head><body>
-<div class="noprint">
-<button onclick="window.print()" style="padding:8px 16px;font-size:14px;cursor:pointer;">🖨️ Печать</button>
-<a href="/order/{{ o.id }}">← К наряду</a>
-</div>
+<div class="noprint"><button onclick="window.print()" style="padding:8px 16px;font-size:14px;cursor:pointer;">🖨️ Печать</button> <a href="/order/{{ o.id }}">← К наряду</a></div>
 <h1>ПАСПОРТ НАРЯДА № {{ o.order_number }}</h1>
 <p>Дата: {{ o.created_at }} | Тип: {{ o.order_type or 'replace' }} | Статус: {{ o.status }}</p>
 <h2>1. Оборудование</h2>
-<table>
-<tr><th></th><th>IP</th><th>Модель</th><th>Портов</th><th>Адрес</th></tr>
+<table><tr><th></th><th>IP</th><th>Модель</th><th>Портов</th><th>Адрес</th></tr>
 <tr><td>Старый</td><td>{{ o.old_switch_ip or '—' }}</td><td>{{ o.old_switch_model or '—' }}</td><td>{{ o.old_switch_ports }}</td><td>{{ o.old_switch_location or '—' }}</td></tr>
-<tr><td>Новый</td><td>{{ o.new_switch_ip or '—' }}</td><td>{{ o.new_switch_model or '—' }}</td><td>{{ o.new_switch_ports }}</td><td>{{ o.new_switch_location or '—' }}</td></tr>
-</table>
+<tr><td>Новый</td><td>{{ o.new_switch_ip or '—' }}</td><td>{{ o.new_switch_model or '—' }}</td><td>{{ o.new_switch_ports }}</td><td>{{ o.new_switch_location or '—' }}</td></tr></table>
 <h2>2. Подключения</h2>
 <table><tr><th>Тип</th><th>Порт (стар)</th><th>Порт (нов)</th><th>Устройство</th><th>Порт там</th></tr>
-{% for l in links %}<tr><td>{{ l.link_type }}</td><td>{{ l.old_port }}</td><td>{{ l.new_port or '—' }}</td><td>{{ l.upstream_device }}</td><td>{{ l.upstream_port }}</td></tr>{% endfor %}
-</table>
+{% for l in links %}<tr><td>{{ l.link_type }}</td><td>{{ l.old_port }}</td><td>{{ l.new_port or '—' }}</td><td>{{ l.upstream_device }}</td><td>{{ l.upstream_port }}</td></tr>{% endfor %}</table>
 <h2>3. Камеры</h2>
 {% if cams %}<table><tr><th></th><th>Модель</th><th>Серийник</th><th>IP/ID</th><th>Логин</th><th>Свитч:порт</th><th>RTSP</th><th>Зона</th></tr>
-{% for c in cams %}<tr><td>{{ 'СТАР' if c.side=='old' else 'НОВ' }}</td><td>{{ c.model or '—' }}</td><td>{{ c.serial or '—' }}</td><td>{{ c.ip or '—' }}</td><td>{{ c.login or '—' }}</td><td>{{ (c.switch_name or '—') ~ ':' ~ (c.switch_port or '—') }}</td><td>{{ c.rtsp or '—' }}</td><td>{{ c.zone or '—' }}</td></tr>{% endfor %}
-</table>{% else %}<p>Камер нет.</p>{% endif %}
+{% for c in cams %}<tr><td>{{ 'СТАР' if c.side=='old' else 'НОВ' }}</td><td>{{ c.model or '—' }}</td><td>{{ c.serial or '—' }}</td><td>{{ c.ip or '—' }}</td><td>{{ c.login or '—' }}</td><td>{{ (c.switch_name or '—') ~ ':' ~ (c.switch_port or '—') }}</td><td>{{ c.rtsp or '—' }}</td><td>{{ c.zone or '—' }}</td></tr>{% endfor %}</table>
+{% else %}<p>Камер нет.</p>{% endif %}
 <h2>4. Абоненты ({{ subs|length }})</h2>
 {% if subs %}<table><tr><th>Порт (стар)</th><th>Порт (нов)</th><th>Абонент</th><th>Адрес</th><th>VLAN</th><th>MAC</th></tr>
-{% for s in subs %}<tr><td>{{ s.old_port }}</td><td>{{ s.new_port or '—' }}</td><td>{{ s.subscriber_name or '' }}</td><td>{{ s.address or '' }}</td><td>{{ s.vlan or '' }}</td><td>{{ s.mac_address or '' }}</td></tr>{% endfor %}
-</table>{% else %}<p>Абонентов нет.</p>{% endif %}
+{% for s in subs %}<tr><td>{{ s.old_port }}</td><td>{{ s.new_port or '—' }}</td><td>{{ s.subscriber_name or '' }}</td><td>{{ s.address or '' }}</td><td>{{ s.vlan or '' }}</td><td>{{ s.mac_address or '' }}</td></tr>{% endfor %}</table>
+{% else %}<p>Абонентов нет.</p>{% endif %}
 <h2>5. Контроль FDB</h2>
 <p>Записей ДО: {{ oldn }} | ПОСЛЕ: {{ newn }} | Потеряно MAC: {{ lost|length }}</p>
 <h2>6. Чек-лист работ</h2>
@@ -80,34 +112,7 @@ def passport(order_id):
     idx = src.rfind("if __name__ == '__main__':")
     src = src[:idx] + PASS + src[idx:]
     print('ok: паспорт возвращён')
-else:
-    print('паспорт на месте')
 
-# 2) Песочница: дымовые тесты ВСЕГДА с паспортом/нарядом/планировщиком (замена строки urls целиком)
-i = src.find("urls = ['/'")
-if i >= 0:
-    j = src.find(']\n', i)
-    if j > 0:
-        new_urls = """import sqlite3 as _sq
-_oid = 1
-try:
-    _c = _sq.connect('switch_replacements.db')
-    _r = _c.execute('SELECT id FROM work_orders ORDER BY id LIMIT 1').fetchone()
-    _c.close()
-    if _r:
-        _oid = _r[0]
-except Exception:
-    pass
-urls = ['/', '/map', '/commands', '/admin', '/stock', '/api/orders', '/api/inventory',
-        '/api/network-map', '/api/commands', '/api/cameras',
-        '/passport/%d' % _oid, '/order/%d' % _oid, '/planner/%d' % _oid]
-"""
-        src = src[:i] + new_urls + src[j+2:]
-        print('ok: дымовые тесты с паспортом')
-else:
-    print('ПРОПУСК: urls песочницы')
-
-# 3) Диагностика: пункт routes_missing (видят и вы, и нейронка)
 if 'routes_missing' not in src:
     rep("'tables': tables,",
 """'tables': tables,
@@ -116,24 +121,6 @@ if 'routes_missing' not in src:
                 '/passport/<int:order_id>', '/api/admin/job', '/api/admin/apply',
                 '/api/admin/ghupdate', '/api/admin/selfheal', '/api/cameras', '/api/changelog')
                 if e not in set(str(r) for r in app.url_map.iter_rules())],""", 'диагностика: routes_missing')
-
-# 4) Аудит: нейронка обязана проверять routes_missing и восстанавливать
-rep('Проанализируй прикреплённый код и диагностику, выяви все обнаруженные баги и несоответствия по пунктам,',
-    'Проанализируй прикреплённый код и диагностику. ПЕРВЫМ делом проверь пункт routes_missing в диагностике — отсутствующие маршруты wajib восстановить. Затем выяви все баги и несоответствия по пунктам,',
-    'аудит: приоритет routes_missing')
-
-# 5) Сторож при старте: пишет в журнал, если ключевые функции съедены
-if 'watchdog' not in src:
-    rep("if __name__ == '__main__':\n    init_db()",
-"""if __name__ == '__main__':
-    try:
-        _me = open(os.path.abspath(__file__)).read()
-        _miss = [m for m in ('def passport(order_id):', 'def admin_job', 'def cameras_api', 'def commands_page') if m not in _me]
-        if _miss:
-            log_change('watchdog', 'В КОДЕ ОТСУТСТВУЕТ: ' + ', '.join(_miss))
-    except Exception:
-        pass
-    init_db()""", 'сторож при старте')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
