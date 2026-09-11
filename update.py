@@ -7,120 +7,284 @@ def rep(old, new, label):
     else:
         print('  ПРОПУСК:', label)
 
-# 0) Проверка: патч вообще про swh.py?
-if 'def patch_looks_valid' not in src:
-    helper = '''
-def patch_looks_valid(code):
-    return ('swh.py' in code) and ('replace(' in code or 'write(' in code)
+# ========== 1) VISION: автозаполнение из скриншота биллинга ==========
+if "'/api/vision'" not in src:
+    ep = '''
+@app.route('/api/vision', methods=['POST'])
+def vision_api():
+    import base64
+    import json as _json
+    import urllib.request
+    pin = request.form.get('pin') or (request.json or {}).get('pin')
+    if pin != ADMIN_PIN:
+        return jsonify({'error': 'pin'}), 403
+    f = request.files.get('file')
+    if not f:
+        return jsonify({'error': 'нет файла'}), 400
+    b64 = base64.b64encode(f.read()).decode()
+    try:
+        r = urllib.request.urlopen('http://localhost:11434/api/tags', timeout=10)
+        tags = [m.get('name', '') for m in _json.loads(r.read().decode()).get('models', [])]
+    except Exception:
+        return jsonify({'error': 'ollama недоступна'}), 503
+    model = next((t for t in tags if 'vl' in t.lower() or 'llava' in t.lower()), None)
+    if not model:
+        return jsonify({'error': 'нет зрячей модели (нужна qwen2.5vl или llava)'}), 503
+    prompt = ('Извлеки данные со скриншота (биллинг, карточка камеры, табличка). '
+              'Верни СТРОГО JSON без пояснений, ключи: login,password,ip,port,vlan,address,mac,rtsp,model,serial,name. '
+              'Отсутствующие значения - пустая строка.')
+    body = _json.dumps({'model': model, 'prompt': prompt, 'images': [b64], 'stream': False}).encode()
+    rq = urllib.request.Request('http://localhost:11434/api/generate', data=body, headers={'Content-Type': 'application/json'})
+    try:
+        r = urllib.request.urlopen(rq, timeout=300)
+        text = _json.loads(r.read().decode()).get('response', '')
+    except Exception as e:
+        return jsonify({'error': str(e)[:200]}), 500
+    t = text.strip()
+    if t.startswith('```'):
+        t = t.split('```')[1]
+        if t.startswith('json'):
+            t = t[4:]
+    data = None
+    try:
+        data = _json.loads(t)
+    except Exception:
+        i = t.find('{'); j = t.rfind('}')
+        if i >= 0 and j > i:
+            try:
+                data = _json.loads(t[i:j+1])
+            except Exception:
+                data = None
+    if data is None:
+        return jsonify({'error': 'модель не дала JSON', 'raw': text[:500]}), 502
+    return jsonify({'ok': True, 'data': data})
+
 
 '''
     idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + helper + src[idx:]
-    print('ok: patch_looks_valid')
+    src = src[:idx] + ep + src[idx:]
+    print('ok: /api/vision')
 
-# 1) Кнопка ⚡ / «Применить патч»: сначала песочница и валидность, потом применение
-rep("""    make_backup()
-    rc, out = _run_patch_code(code, 'apply')""",
-"""    if not patch_looks_valid(code):
-        return jsonify({'rc': -8, 'out': 'ОТКЛОНЕНО: патч не модифицирует swh.py (похоже на посторонний код). Применение невозможно.'})
-    ok, gate = sandbox_check(code)
-    if not ok:
-        return jsonify({'rc': -8, 'out': 'ОТКЛОНЕНО песочницей (файл не изменён):\\n' + gate[:1500]})
-    make_backup()
-    rc, out = _run_patch_code(code, 'apply')""", 'apply: гейт песочницы')
+# ========== 2) FDB со свитча по SNMP ==========
+if "'/api/fdb_fetch'" not in src:
+    ep = '''
+@app.route('/api/fdb_fetch', methods=['POST'])
+def fdb_fetch():
+    import subprocess
+    import re as _re
+    d = request.json or {}
+    ip = d.get('ip', '')
+    community = d.get('community', 'public')
+    order_id = d.get('order_id')
+    side = d.get('side', 'old')
+    if not ip or not order_id:
+        return jsonify({'error': 'нужны ip и order_id'}), 400
+    try:
+        p = subprocess.run(['snmpwalk', '-v2c', '-c', community, ip, '1.3.6.1.2.1.17.7.1.2.2.1.2'],
+                           capture_output=True, text=True, timeout=60)
+    except FileNotFoundError:
+        return jsonify({'error': 'на сервере нет snmpwalk. Установите: apt-get install -y snmp'}), 503
+    except Exception as e:
+        return jsonify({'error': str(e)[:200]}), 500
+    if p.returncode != 0:
+        return jsonify({'error': 'snmpwalk: ' + (p.stderr or p.stdout)[:300]}), 502
+    rows = []
+    for line in p.stdout.splitlines():
+        m = _re.search(r'\\.1\\.2\\.2\\.1\\.2\\.(\\d+)((?:\\.\\d+){6})\\s+=\\s+INTEGER:\\s*(\\d+)', line)
+        if m:
+            vlan = m.group(1)
+            hx = ''.join('%02X' % int(x) for x in m.group(2).strip('.').split('.'))
+            mac = ':'.join(hx[i:i+2] for i in range(0, 12, 2))
+            rows.append((int(m.group(3)), vlan, mac))
+    if not rows:
+        return jsonify({'error': 'FDB пуста или неверный community', 'out': p.stdout[:300]}), 502
+    conn = get_db()
+    conn.execute("DELETE FROM fdb_tables WHERE order_id=? AND switch_type=?", (order_id, side))
+    for port, vlan, mac in rows:
+        conn.execute('INSERT INTO fdb_tables (order_id, switch_type, port, vlan, mac_address, subscriber) VALUES (?,?,?,?,?,?)',
+                     (order_id, side, port, vlan, mac, ''))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True, 'count': len(rows)})
 
-# 2) Автономка и строгий повтор: отсев посторонних «патчей»
-rep("""        ok, gate = sandbox_check(code)
-        job_log('[auto] sandbox: ' + gate[:150])""",
-"""        if not patch_looks_valid(code):
-            last_gate = 'патч не модифицирует swh.py (посторонний код)'
-            job_log('[auto] отсев: ' + last_gate)
-            continue
-        ok, gate = sandbox_check(code)
-        job_log('[auto] sandbox: ' + gate[:150])""", 'автономка: отсев мусора')
 
-rep("""    if (payload or {}).get('want_patch') and not _extract_patch(text).strip():""",
-"""    code_ai = _extract_patch(text)
-    if code_ai.strip() and not patch_looks_valid(code_ai):
-        job_log('[ai] отсев: патч не про swh.py — строгий повтор')
-        text = _ollama_gen(prompt + '\\n\\nТвой прошлый ответ содержал НЕ патч для swh.py, а постороннюю программу. Выдай патч, который читает swh.py, правит через replace и записывает обратно.', 16384, 900)
-    if (payload or {}).get('want_patch') and not _extract_patch(text).strip():""", 'ai: отсев мусора')
+'''
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + ep + src[idx:]
+    print('ok: /api/fdb_fetch')
 
-# 3) Паспорт + routes_missing + сторож (если прошлое обновление не доехало)
-if 'def passport(order_id):' not in src:
-    PASS = '''PASS_HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Паспорт наряда {{ o.order_number }}</title>
-<style>
-body{font-family:Arial,sans-serif;font-size:12px;color:#000;margin:15mm 15mm;}
-h1{font-size:18px;margin:0 0 6px;} h2{font-size:14px;margin:14px 0 6px;}
-table{width:100%;border-collapse:collapse;margin:6px 0;}
-td,th{border:1px solid #000;padding:4px 6px;font-size:11px;text-align:left;vertical-align:top;}
-.noprint{margin:0 0 12px;} @media print{.noprint{display:none;}}
-</style></head><body>
-<div class="noprint"><button onclick="window.print()" style="padding:8px 16px;font-size:14px;cursor:pointer;">🖨️ Печать</button> <a href="/order/{{ o.id }}">← К наряду</a></div>
-<h1>ПАСПОРТ НАРЯДА № {{ o.order_number }}</h1>
-<p>Дата: {{ o.created_at }} | Тип: {{ o.order_type or 'replace' }} | Статус: {{ o.status }}</p>
-<h2>1. Оборудование</h2>
-<table><tr><th></th><th>IP</th><th>Модель</th><th>Портов</th><th>Адрес</th></tr>
-<tr><td>Старый</td><td>{{ o.old_switch_ip or '—' }}</td><td>{{ o.old_switch_model or '—' }}</td><td>{{ o.old_switch_ports }}</td><td>{{ o.old_switch_location or '—' }}</td></tr>
-<tr><td>Новый</td><td>{{ o.new_switch_ip or '—' }}</td><td>{{ o.new_switch_model or '—' }}</td><td>{{ o.new_switch_ports }}</td><td>{{ o.new_switch_location or '—' }}</td></tr></table>
-<h2>2. Подключения</h2>
-<table><tr><th>Тип</th><th>Порт (стар)</th><th>Порт (нов)</th><th>Устройство</th><th>Порт там</th></tr>
-{% for l in links %}<tr><td>{{ l.link_type }}</td><td>{{ l.old_port }}</td><td>{{ l.new_port or '—' }}</td><td>{{ l.upstream_device }}</td><td>{{ l.upstream_port }}</td></tr>{% endfor %}</table>
-<h2>3. Камеры</h2>
-{% if cams %}<table><tr><th></th><th>Модель</th><th>Серийник</th><th>IP/ID</th><th>Логин</th><th>Свитч:порт</th><th>RTSP</th><th>Зона</th></tr>
-{% for c in cams %}<tr><td>{{ 'СТАР' if c.side=='old' else 'НОВ' }}</td><td>{{ c.model or '—' }}</td><td>{{ c.serial or '—' }}</td><td>{{ c.ip or '—' }}</td><td>{{ c.login or '—' }}</td><td>{{ (c.switch_name or '—') ~ ':' ~ (c.switch_port or '—') }}</td><td>{{ c.rtsp or '—' }}</td><td>{{ c.zone or '—' }}</td></tr>{% endfor %}</table>
-{% else %}<p>Камер нет.</p>{% endif %}
-<h2>4. Абоненты ({{ subs|length }})</h2>
-{% if subs %}<table><tr><th>Порт (стар)</th><th>Порт (нов)</th><th>Абонент</th><th>Адрес</th><th>VLAN</th><th>MAC</th></tr>
-{% for s in subs %}<tr><td>{{ s.old_port }}</td><td>{{ s.new_port or '—' }}</td><td>{{ s.subscriber_name or '' }}</td><td>{{ s.address or '' }}</td><td>{{ s.vlan or '' }}</td><td>{{ s.mac_address or '' }}</td></tr>{% endfor %}</table>
-{% else %}<p>Абонентов нет.</p>{% endif %}
-<h2>5. Контроль FDB</h2>
-<p>Записей ДО: {{ oldn }} | ПОСЛЕ: {{ newn }} | Потеряно MAC: {{ lost|length }}</p>
-<h2>6. Чек-лист работ</h2>
-<table>{% for s in steps %}<tr><td style="width:10px;text-align:center;">{{ '☑' if (s.done or fl.get(loop.index0)) else '☐' }}</td><td>{{ s.step_text }}</td></tr>{% endfor %}</table>
-<h2>Подписи</h2>
-<table><tr><td style="height:60px;">Работу выполнил: ____________________</td><td style="height:60px;">Принял: ____________________</td></tr></table>
+# ========== 3) ПОЛЕВОЙ РЕЖИМ ==========
+if "'/field'" not in src:
+    FIELD = '''FIELD_LIST_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Полевой режим</title>
+<style>body{font-family:Arial;font-size:18px;margin:0;background:#f5f5f5;}
+.card{background:#fff;margin:10px;padding:16px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.15);}
+a.btn{display:block;background:#3498db;color:#fff;padding:14px;border-radius:8px;text-decoration:none;text-align:center;font-size:20px;margin:8px 0;}
+.big{font-size:22px;font-weight:600;} label.step{display:block;background:#fff;margin:8px;padding:14px;border-radius:10px;font-size:19px;}
+input[type=checkbox]{width:28px;height:28px;vertical-align:middle;margin-right:10px;}
+.ph{width:110px;height:85px;object-fit:cover;border-radius:6px;margin:4px;}</style></head>
+<body><div class="card big">📱 Полевой режим — открытые наряды</div>
+{% for o in orders %}<div class="card"><div class="big">Наряд {{ o.order_number }}</div>
+<div>{{ o.old_switch_ip or '—' }} → {{ o.new_switch_ip or '—' }}</div>
+<div>{{ o.old_switch_location or o.new_switch_location or '' }}</div>
+<a class="btn" href="/field/{{ o.id }}">Открыть ▶</a></div>{% endfor %}
 </body></html>"""
 
-@app.route('/passport/<int:order_id>')
-def passport(order_id):
+FIELD_ORDER_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Наряд {{ o.order_number }} — полевой</title>
+<style>body{font-family:Arial;font-size:18px;margin:0;background:#f5f5f5;}
+.card{background:#fff;margin:10px;padding:16px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.15);}
+a.btn{display:inline-block;background:#3498db;color:#fff;padding:12px;border-radius:8px;text-decoration:none;font-size:18px;margin:6px 4px 6px 0;}
+.big{font-size:22px;font-weight:600;} label.step{display:block;background:#fff;margin:8px;padding:14px;border-radius:10px;font-size:19px;}
+input[type=checkbox]{width:28px;height:28px;vertical-align:middle;margin-right:10px;}
+.ph{width:110px;height:85px;object-fit:cover;border-radius:6px;margin:4px;}</style></head>
+<body>
+<div class="card big">📱 Наряд {{ o.order_number }}</div>
+<div class="card">
+<div><b>Адрес:</b> {{ o.old_switch_location or o.new_switch_location or '—' }}</div>
+<div><b>Старый:</b> {{ o.old_switch_ip or '—' }} ({{ o.old_switch_model or '—' }})</div>
+<div><b>Новый:</b> {{ o.new_switch_ip or '—' }} ({{ o.new_switch_model or '—' }})</div>
+<a class="btn" href="/passport/{{ o.id }}" target="_blank">🖨️ Паспорт</a>
+<a class="btn" href="/field">← Список</a>
+</div>
+<div class="card big">✅ Этапы</div>
+{% for s in steps %}<label class="step"><input type="checkbox" {% if s.done or fl.get(loop.index0) %}checked{% endif %} onchange="tgStep({{ s.id }}, this.checked)"> {{ s.step_text }}</label>{% endfor %}
+<div class="card big">🔌 Подключения</div>
+<div class="card">{% for l in links %}<div>{{ '⬆️' if l.link_type=='uplink' else '⬇️' }} порт {{ l.old_port }} → <b>{{ l.new_port or '??' }}</b> | {{ l.upstream_device }} : {{ l.upstream_port }}</div>{% endfor %}
+{% for c in cams %}<div>📹 {{ c.model }}: <a href="{{ c.rtsp }}" target="_blank">поток</a> | {{ c.switch_name }}:{{ c.switch_port }}</div>{% endfor %}
+</div>
+<div class="card big">📷 Фото ДО</div>
+<div class="card"><div id="phBefore"></div><input type="file" accept="image/*" capture="environment" onchange="upF('field_before', this)"></div>
+<div class="card big">📷 Фото ПОСЛЕ</div>
+<div class="card"><div id="phAfter"></div><input type="file" accept="image/*" capture="environment" onchange="upF('field_after', this)"></div>
+<script>
+var orderId={{ o.id }};
+function tgStep(id, done){
+  fetch('/api/steps/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({done:done?1:0})});
+}
+function upF(type, input){
+  var f=input.files[0];
+  if(!f) return;
+  var fd=new FormData();
+  fd.append('file', f);
+  fd.append('entity_type', type);
+  fd.append('entity_id', orderId);
+  fd.append('description', type);
+  fetch('/api/attachments',{method:'POST', body:fd}).then(function(){ loadF(type); });
+  input.value='';
+}
+function loadF(type){
+  var box=document.getElementById(type==='field_before'?'phBefore':'phAfter');
+  fetch('/api/attachments?entity_type='+type+'&entity_id='+orderId).then(function(r){return r.json();}).then(function(rows){
+    box.innerHTML=rows.map(function(a){ return '<a href="/uploads/'+a.filename+'" target="_blank"><img class="ph" src="/uploads/'+a.filename+'"></a>'; }).join('');
+  });
+}
+loadF('field_before'); loadF('field_after');
+</script>
+</body></html>"""
+
+@app.route('/field')
+def field_page():
+    conn = get_db()
+    orders = conn.execute("SELECT * FROM work_orders WHERE status!='closed' ORDER BY id DESC").fetchall()
+    conn.close()
+    return render_template_string(FIELD_LIST_HTML, orders=orders)
+
+@app.route('/field/<int:order_id>')
+def field_order(order_id):
     conn = get_db()
     o = conn.execute('SELECT * FROM work_orders WHERE id=?', (order_id,)).fetchone()
     if not o:
         conn.close()
         return 'Наряд не найден', 404
-    links = conn.execute('SELECT * FROM links WHERE order_id=? ORDER BY link_type, old_port', (order_id,)).fetchall()
-    subs = conn.execute('SELECT * FROM subscribers WHERE order_id=? ORDER BY old_port', (order_id,)).fetchall()
     steps = conn.execute('SELECT * FROM order_steps WHERE order_id=? ORDER BY pos', (order_id,)).fetchall()
+    links = conn.execute('SELECT * FROM links WHERE order_id=? ORDER BY link_type, old_port', (order_id,)).fetchall()
     try:
         cams = conn.execute('SELECT * FROM cameras WHERE order_id=? ORDER BY side', (order_id,)).fetchall()
     except Exception:
         cams = []
-    oldf = conn.execute("SELECT * FROM fdb_tables WHERE order_id=? AND switch_type='old'", (order_id,)).fetchall()
-    newf = conn.execute("SELECT * FROM fdb_tables WHERE order_id=? AND switch_type='new'", (order_id,)).fetchall()
     conn.close()
-    fl = auto_flags(order_id)
-    om = {r['mac_address'].upper(): r for r in oldf if r['mac_address']}
-    nm = {r['mac_address'].upper(): r for r in newf if r['mac_address']}
-    lost = [(m, om[m]['port'], om[m]['subscriber'] or '') for m in sorted(set(om) - set(nm))]
-    return render_template_string(PASS_HTML, o=o, links=links, subs=subs, cams=cams,
-        steps=steps, fl=fl, oldn=len(oldf), newn=len(newf), lost=lost)
+    return render_template_string(FIELD_ORDER_HTML, o=o, steps=steps, links=links, cams=cams, fl=auto_flags(order_id))
 
 
 '''
     idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + PASS + src[idx:]
-    print('ok: паспорт возвращён')
+    src = src[:idx] + FIELD + src[idx:]
+    print('ok: полевой режим /field')
 
-if 'routes_missing' not in src:
-    rep("'tables': tables,",
-"""'tables': tables,
-            'routes_missing': [e for e in ('/', '/map', '/commands', '/admin', '/stock',
-                '/order/<int:order_id>', '/planner/<int:order_id>', '/fdb/<int:order_id>',
-                '/passport/<int:order_id>', '/api/admin/job', '/api/admin/apply',
-                '/api/admin/ghupdate', '/api/admin/selfheal', '/api/cameras', '/api/changelog')
-                if e not in set(str(r) for r in app.url_map.iter_rules())],""", 'диагностика: routes_missing')
+rep('<a href="/commands" class="nav-link">📚 Команды</a>',
+    '<a href="/commands" class="nav-link">📚 Команды</a>\n            <a href="/field" class="nav-link">📱 Полевой</a>',
+    'ссылка Полевой в меню')
+
+# ========== 4) common.js: кнопка 📸 + SNMP-блок на FDB ==========
+import os
+ajs_path = os.path.join('static', 'common.js')
+ajs = open(ajs_path).read() if os.path.exists(ajs_path) else ''
+if 'camFromShot' not in ajs:
+    ajs = ajs.replace("""onclick="importCam('+c.id+')">📥 Импорт конфига</button>'""",
+"""onclick="importCam('+c.id+')">📥 Импорт конфига</button> '
+   +'<button class="btn btn-secondary" onclick="camFromShot('+c.id+')">📸 Из скриншота</button>'""", 1)
+    ajs += '''
+function camFromShot(id){
+  var inp=document.createElement('input');
+  inp.type='file'; inp.accept='image/*';
+  inp.onchange=function(){
+    var f=inp.files[0];
+    if(!f) return;
+    var fd=new FormData();
+    fd.append('file', f);
+    fd.append('pin', localStorage.getItem('swhpin')||prompt('PIN:')||'');
+    alert('Распознаю скриншот (до минуты)...');
+    fetch('/api/vision',{method:'POST', body:fd}).then(function(r){return r.json();}).then(function(res){
+      if(!res.data){ alert('Ошибка: '+(res.error||'неизвестно')+(res.raw?' | '+res.raw:'')); return; }
+      var d=res.data;
+      var c=document.querySelector('[data-cam="'+id+'"]');
+      if(!c) return;
+      function set(cls, v){ if(v){ var el=c.querySelector(cls); if(el){ el.value=v; } } }
+      set('.camLogin', d.login); set('.camPass', d.password); set('.camIp', d.ip);
+      set('.camPort', d.port); set('.camVlan', d.vlan); set('.camMac', d.mac);
+      set('.camRtsp', d.rtsp); set('.camModel', d.model); set('.camSerial', d.serial);
+      set('.camZone', d.address); set('.camNotes', d.name);
+      alert('Поля заполнены! Проверьте и нажмите 💾 Сохранить');
+    }).catch(function(e){ alert('Ошибка: '+e.message); });
+  };
+  inp.click();
+}
+function fetchFdb(){
+  var el=document.getElementById('fdbIp');
+  var body={order_id:parseInt(el.dataset.order), ip:el.value,
+    community:document.getElementById('fdbCom').value,
+    side:document.getElementById('fdbSide').value};
+  document.getElementById('fdbMsg').textContent='Снимаю FDB...';
+  fetch('/api/fdb_fetch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  .then(function(r){return r.json();}).then(function(res){
+    document.getElementById('fdbMsg').textContent=res.ok? ('Готово: '+res.count+' записей') : ('Ошибка: '+res.error);
+    if(res.ok){ setTimeout(function(){ location.reload(); }, 1200); }
+  });
+}
+document.addEventListener('DOMContentLoaded', function(){
+  if(location.pathname.indexOf('/fdb/')===0){
+    var c=document.querySelector('.container');
+    if(c){
+      var d=document.createElement('div');
+      d.style.cssText='background:#fff;padding:1rem;border-radius:8px;margin-bottom:1rem;';
+      d.innerHTML='<b>🧲 Снять FDB со свитча (SNMP)</b><br>IP: <input id="fdbIp" style="width:140px;"> Community: <input id="fdbCom" value="public" style="width:100px;"> Сторона: <select id="fdbSide"><option value="old">ДО</option><option value="new">ПОСЛЕ</option></select> <button class="btn btn-primary" onclick="fetchFdb()">Снять</button> <span id="fdbMsg"></span>';
+      c.insertBefore(d, c.firstChild);
+      var m=location.pathname.match(/\\/fdb\\/(\\d+)/);
+      if(m){
+        document.getElementById('fdbIp').dataset.order=m[1];
+        fetch('/api/orders/'+m[1]).then(function(r){return r.json();}).then(function(o){
+          document.getElementById('fdbIp').value=o.old_switch_ip||'';
+        });
+      }
+    }
+  }
+});
+'''
+    open(ajs_path, 'w').write(ajs)
+    print('ok: common.js 📸 + SNMP')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
