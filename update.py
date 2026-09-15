@@ -1,11 +1,5 @@
-import ast, sqlite3
+import ast, json
 src = open('swh.py').read()
-def rep(old, new, label):
-    global src
-    if old in src:
-        src = src.replace(old, new, 1); print('  ok:', label)
-    else:
-        print('  ПРОПУСК:', label)
 
 D=[
 ('Тура','10.163.201.40',[(2101,'красный'),(2102,'оранжевый'),(2103,'желтый'),(2104,'зеленый'),(2105,'голубой'),(2106,'синий'),(2107,'фиолетовый'),(2109,'Зона 09'),(2110,'Морозово'),(2111,'Зона 11'),(2112,'Зона 12'),(2113,'Зона 13'),(2115,'Север'),(2116,'Резерв'),(2117,'ЖК Клевер к1'),(2118,'ЖК Клевер к2'),(2119,'ЖК Клевер к3'),(2120,'ЖК Клевер к4')]),
@@ -32,57 +26,25 @@ D=[
 ('Сегмент 17 Афанасовский','10.163.17.1',[(2170,'Сегмент 17-01 МКД'),(2171,'Сегмент 17-02 PON'),(2172,'Сегмент 17-03'),(2173,'Сегмент 17-04'),(2174,'Сегмент 17-05'),(2175,'Сегмент 17-06'),(2176,'Сегмент 17-07'),(2177,'Сегмент 17-08'),(2178,'Сегмент 17-09'),(2179,'Сегмент 17-10')]),
 ]
 
-# 0) Гарантированный дозаполн базы прямо сейчас
-conn = sqlite3.connect('switch_replacements.db')
-conn.execute('''CREATE TABLE IF NOT EXISTS region_vlans (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    region TEXT, switch_ip TEXT, segment TEXT, vlan INTEGER,
-    UNIQUE(region, vlan))''')
-for region, ip, rows in D:
-    for vlan, seg in rows:
-        conn.execute('INSERT OR IGNORE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
-                     (region, ip, seg, vlan))
-conn.commit()
-conn.close()
-print('ok: база VLAN дозаполнена')
+FLAT = [[region, ip, seg, vlan] for region, ip, rows in D for vlan, seg in rows]
+LITERAL = 'var VLAN_DATA=' + json.dumps(FLAT, ensure_ascii=False) + ';'
 
-# 1) Сервер: сид-данные + самодозаполнение при пустой таблице
-if 'SEED_VLANS' not in src:
-    seed = 'SEED_VLANS = ' + repr(D) + '''
-
-def ensure_vlans(conn):
-    n = conn.execute('SELECT COUNT(*) c FROM region_vlans').fetchone()['c']
-    if n == 0:
-        for region, ip, rows in SEED_VLANS:
-            for vlan, seg in rows:
-                conn.execute('INSERT OR IGNORE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
-                             (region, ip, seg, vlan))
-        conn.commit()
-
-'''
-    idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + seed + src[idx:]
-    print('ok: SEED_VLANS + ensure_vlans')
-
-rep("""    conn = get_db()
-    if request.method == 'GET':
-        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()""",
-"""    conn = get_db()
-    if request.method == 'GET':
-        ensure_vlans(conn)
-        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()""",
-    'api vlans: самодозаполнение')
-
-# 2) Клиент: всеядный поиск + счётчики + ?q=
-i = src.find('var ROWS=[];')
-j = src.find('\nload();', i) if i >= 0 else -1
-if i >= 0 and j > i:
-    NEWJS = '''var ROWS=[];
+NEWJS = LITERAL + r'''
+var ROWS=[];
 function norm(s){ return (s||'').toLowerCase().replace(/[^0-9a-zа-яё./-]/g,''); }
+function baseRows(){ return VLAN_DATA.map(function(r){ return {region:r[0], switch_ip:r[1], segment:r[2], vlan:r[3]}; }); }
 function load(){
   var qp=new URLSearchParams(location.search).get('q')||'';
   if(qp){ document.getElementById('q').value=qp; }
-  fetch('/api/vlans').then(function(r){return r.json();}).then(function(rows){ ROWS=rows; render(); });
+  ROWS=baseRows();
+  render();
+  fetch('/api/vlans').then(function(r){return r.json();}).then(function(rows){
+    (rows||[]).forEach(function(x){
+      var ex=ROWS.some(function(r){ return r.region===x.region && String(r.vlan)===String(x.vlan); });
+      if(!ex){ ROWS.push(x); }
+    });
+    render();
+  }).catch(function(){});
 }
 function render(){
   var q=norm(document.getElementById('q').value);
@@ -93,13 +55,11 @@ function render(){
            norm(r.switch_ip).indexOf(q)>=0 ||
            String(r.vlan).indexOf(q)>=0;
   });
-  var c=' всего: '+ROWS.length+', найдено: '+f.length;
-  if(!ROWS.length){ c+=' | ТАБЛИЦА ПУСТА — дёрните обновление с GitHub ещё раз'; }
-  document.getElementById('cnt').textContent=c;
+  document.getElementById('cnt').textContent=' всего: '+ROWS.length+', найдено: '+f.length;
   document.getElementById('tb').innerHTML=f.map(function(r){
     return '<tr><td>'+r.region+'</td><td>'+r.switch_ip+'</td><td>'+r.segment+'</td><td><b>'+r.vlan+'</b></td>'
-      +'<td><button class="btn" style="background:#3498db;" onclick="navigator.clipboard.writeText(\\''+r.vlan+'\\');alert(\\'VLAN скопирован\\')">📋</button> '
-      +'<button class="btn" style="background:#27ae60;" onclick="openSw(\\''+r.switch_ip+'\\')">🔗 свитч</button></td></tr>';
+      +'<td><button class="btn" style="background:#3498db;" onclick="navigator.clipboard.writeText(\''+r.vlan+'\');alert(\'VLAN скопирован\')">📋</button> '
+      +'<button class="btn" style="background:#27ae60;" onclick="openSw(\''+r.switch_ip+'\')">🔗 свитч</button></td></tr>';
   }).join('');
 }
 function openSw(ip){
@@ -113,11 +73,16 @@ function addRow(){
          pin:localStorage.getItem('swhpin')||prompt('PIN:')||''};
   fetch('/api/vlans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})
   .then(function(r){return r.json();}).then(function(res){ if(res.ok){ load(); } else { alert('Ошибка: '+(res.error||'')); } });
-}'''
-    src = src[:i] + NEWJS + src[j:]
-    print('ok: всеядный поиск + счётчики')
+}
+load();'''
+
+i = src.find('var ROWS=[];')
+j = src.find('\nload();', i) if i >= 0 else -1
+if i >= 0 and j > i:
+    src = src[:i] + NEWJS + src[j+len('\nload();'):]
+    print('ok: таблица VLAN вшита в страницу (' + str(len(FLAT)) + ' строк)')
 else:
-    print('ПРОПУСК: якорь JS vlans')
+    print('ПРОПУСК: якорь JS страницы vlans')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
