@@ -1,121 +1,89 @@
-import ast
-GENJS = '''var TPL={ dlink:{
- create:'create vlan {vlan}',
- del_vlan:'delete vlan {vlan}',
- add_untag:'config vlan {vlan} add untagged {ports}',
- add_tag:'config vlan {vlan} add tagged {ports}',
- del_port:'config vlan {vlan} delete {ports}',
- show_vlan:'show vlan {vlan}',
- show_ports:'show vlan ports {ports}',
- pvid:'config ports {ports} pvid {vlan}',
- find_mac:'show fdb {mac}',
- show_fdb:'show fdb',
- port_info:'show ports {ports}',
- port_util:'show utilization ports {ports}',
- port_err:'show counters ports {ports}',
- clear_cnt:'clear counters ports {ports}',
- port_speed:'config ports {ports} speed {speed}{duplex}',
- port_off:'config ports {ports} state disabled',
- port_on:'config ports {ports} state enabled',
- save:'save',
- reboot:'reboot',
- cam:'create vlan {vlan}\\nconfig vlan {vlan} add untagged {ports}\\nconfig ports {ports} pvid {vlan}',
- trunk:'config vlan {vlan} add tagged {ports}'
-}};
-var NAMES={create:'Создать VLAN',del_vlan:'Удалить VLAN',add_untag:'Добавить порт в VLAN (untagged / абонентский)',add_tag:'Добавить порт в VLAN (tagged / магистраль)',del_port:'Убрать порт из VLAN',show_vlan:'Показать информацию о VLAN',show_ports:'Показать VLAN на порту(ах)',pvid:'Назначить PVID порту (абонентский)',find_mac:'Найти MAC в FDB',show_fdb:'Показать всю FDB-таблицу',port_info:'Информация о портах (состояние/скорость/duplex)',port_util:'Загрузка портов (%) — узкие места и штормы',port_err:'Ошибки портов (счётчики CRC и др.)',clear_cnt:'Сбросить счётчики ошибок портов',port_speed:'Изменить скорость/duplex порта',port_off:'Выключить порт',port_on:'Включить порт',save:'Сохранить конфигурацию (save)',reboot:'Перезагрузить свитч (осторожно!)',cam:'КОМБО: камера на VLAN (создать+порт+PVID)',trunk:'КОМБО: магистраль на ядро (tagged)'};
-var HINTS={create:'VLAN — номер нового VLAN (напр. 135). Порты не нужны.',
-add_untag:'VLAN — номер VLAN; Порт(ы) — абонентский порт или порт камеры (напр. 21 или 19-24).',
-add_tag:'VLAN — номер VLAN; Порт(ы) — МАГИСТРАЛЬНЫЙ порт / uplink (напр. 26-28 или 28).',
-del_port:'VLAN — номер VLAN; Порт(ы) — порты, которые убрать из этого VLAN.',
-del_vlan:'VLAN — номер удаляемого VLAN (сначала уберите из него все порты!).',
-show_vlan:'VLAN — номер VLAN, который показать.',
-show_ports:'Порт(ы) — порты, по которым показать VLAN-конфиг.',
-pvid:'VLAN — номер VLAN; Порт(ы) — абонентские порты, где PVID = этот VLAN.',
-find_mac:'MAC — адрес вида 00:1A:79:xx:xx:xx (камеры/абонента).',
-show_fdb:'Ничего вводить не надо — покажет всю таблицу MAC.',
-port_info:'Порт(ы) — порты для просмотра (напр. 21 или 1-28). Покажет состояние, скорость, duplex.',
-port_util:'Порт(ы) — порты для замера. Показывает % загрузки полосы: >80% на uplink = узкое место, 100% при пустых абонентах = шторм/петля.',
-port_err:'Порт(ы) — порты для просмотра счётчиков ошибок (CRC/Align). Если на прошивке команды нет — поправьте шаблон.',
-clear_cnt:'Порт(ы) — порты, на которых сбросить счётчики ошибок.',
-port_speed:'Порт(ы) — порты; Скорость и Duplex выбираются из списков ниже (auto / 10 / 100 / 1000).',
-port_off:'Порт(ы) — порты, которые выключить.',
-port_on:'Порт(ы) — порты, которые включить.',
-save:'Ничего вводить не надо — сохранит конфиг в память свитча.',
-reboot:'ВНИМАНИЕ: свитч перезагрузится! Вводить ничего не надо.',
-cam:'VLAN — VLAN камеры (напр. 135); Порт(ы) — порт, куда воткнута камера.',
-trunk:'VLAN — VLAN, который пропускаем; Порт(ы) — магистральный порт на ядро/uplink.'};
-var MEMO={cam:'1) создать VLAN\\n2) добавить порт камеры untagged\\n3) PVID порту\\n4) save\\n5) в биллинге вписать VLAN 135 (абон. и реал.)\\n6) проверить поток камеры',
-trunk:'1) добавить магистральный порт tagged\\n2) save\\n3) проверить, что uplink поднялся',
-create:'1) create vlan\\n2) save',
-add_untag:'1) добавить порт untagged\\n2) save\\n3) проверить состояние порта',
-del_port:'1) убрать порт из VLAN\\n2) save',
-del_vlan:'1) убрать все порты из VLAN\\n2) delete vlan\\n3) save',
-save:'1) save\\n2) убедиться, что конфиг сохранился',
-reboot:'1) предупредить абонентов\\n2) reboot\\n3) проверить доступность',
-port_speed:'1) выставить скорость/duplex\\n2) save\\n3) проверить, что порт поднялся на нужной скорости (show ports)',
-port_err:'1) посмотреть счётчики\\n2) если ошибки растут — проверить кабель/коннектор/SFP\\n3) после устранения — сбросить счётчики',
-port_info:'1) посмотреть состояние/скорость\\n2) если порт down или не та скорость — проверить кабель и настройки порта',
-port_util:'1) замерить загрузку\\n2) >80% на магистрали — планировать апгрейд/разгрузку\\n3) 100% без абонентов — искать петлю/шторм'};
-function setFam(){
-  var f=document.getElementById('fam').value;
-  var o=document.getElementById('op');
-  if(f==='custom'){ o.innerHTML='<option value="custom">Свой шаблон</option>'; }
-  else { o.innerHTML=Object.keys(TPL.dlink).map(function(k){ return '<option value="'+k+'">'+NAMES[k]+'</option>'; }).join(''); }
-  fillTpl();
-}
-function fillTpl(){
-  var f=document.getElementById('fam').value;
-  var k=document.getElementById('op').value;
-  if(f!=='custom'){ document.getElementById('tpl').value=(TPL.dlink[k]||''); }
-  var h=document.getElementById('hint');
-  if(h){ h.textContent='💡 '+(HINTS[k]||'Заполните поля и нажмите «Сгенерировать».'); }
-  var m=document.getElementById('memo');
-  if(m){ m.value=MEMO[k]||''; }
-  var sr=document.getElementById('spdRow');
-  if(sr){ sr.style.display=(k==='port_speed')? 'inline':'none'; }
-}
-function gen(){
-  var t=document.getElementById('tpl').value;
-  var spd=(document.getElementById('spd')||{}).value||'auto';
-  var dpx=(document.getElementById('dpx')||{}).value||'';
-  var r=t.replace(/{vlan}/g,document.getElementById('v').value)
-         .replace(/{ports}/g,document.getElementById('p').value)
-         .replace(/{mac}/g,document.getElementById('m').value)
-         .replace(/{ip}/g,document.getElementById('ip').value)
-         .replace(/{text}/g,document.getElementById('txt').value)
-         .replace(/{speed}/g,spd)
-         .replace(/{duplex}/g,dpx? ' duplex '+dpx : '');
-  document.getElementById('outg').value=r;
-}
-function cpy(){ navigator.clipboard.writeText(document.getElementById('outg').value); alert('Команды скопированы'); }
-function toTools(){ sessionStorage.setItem('gen2tools', document.getElementById('outg').value); location.href='/tools'; }
-function sav(){
-  var t=prompt('Название в справочнике:','Команда: '+(NAMES[document.getElementById('op').value]||document.getElementById('op').value));
-  if(!t) return;
-  fetch('/api/commands',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({title:t, category:'генератор', body:document.getElementById('outg').value, notes:document.getElementById('memo').value})})
-  .then(function(){ alert('Сохранено в справочник команд'); });
-}
-if(document.readyState!=='loading'){ setFam(); }
-else { document.addEventListener('DOMContentLoaded', setFam); }
-'''
-open('static/gen.js', 'w').write(GENJS)
-print('ok: gen.js v5')
-
+import ast, os
 src = open('swh.py').read()
-if 'id="spdRow"' not in src:
-    old = 'Текст: <input id="txt" style="width:140px;">'
+def rep(old, new, label):
+    global src
     if old in src:
-        src = src.replace(old,
-"""<span id="spdRow" style="display:none;">Скорость: <select id="spd"><option value="auto">auto</option><option value="10">10</option><option value="100">100</option><option value="1000">1000</option></select>
-Duplex: <select id="dpx"><option value="">—</option><option value="half">half</option><option value="full">full</option></select></span>
-Текст: <input id="txt" style="width:140px;">""", 1)
-        print('ok: списки скорости/duplex')
+        src = src.replace(old, new, 1); print('  ok:', label)
     else:
-        print('ПРОПУСК: якорь Текст')
-if 'gen.js?v=5' not in src:
-    src = src.replace('/static/gen.js?v=4', '/static/gen.js?v=5', 1)
-    print('ok: версия gen.js v5')
+        print('  ПРОПУСК:', label)
+
+# 1) openDevTools в common.js
+ajs_path = os.path.join('static', 'common.js')
+ajs = open(ajs_path).read() if os.path.exists(ajs_path) else ''
+if 'openDevTools' not in ajs:
+    ajs += '''
+function openDevTools(s){
+  if(!s){ alert('Устройство не указано'); return; }
+  var ip=(s.match(/(\\d{1,3}\\.){3}\\d{1,3}/)||[null])[0];
+  if(!ip && window.devArr){
+    var d=devArr.find(function(x){ return x.name===s; });
+    if(d){ ip=d.ip_address; }
+  }
+  if(!ip){ alert('Не найден IP устройства: '+s); return; }
+  sessionStorage.setItem('toolz_tgt', ip);
+  sessionStorage.setItem('toolz_tool', 'ssh');
+  location.href='/tools';
+}
+'''
+    open(ajs_path, 'w').write(ajs)
+    print('ok: openDevTools')
+
+# 2) Планировщик: uplink-таблица — select устройств + адрес + 🔗
+rep("""<tr data-lid="${link.id}">
+                                <td><input type="number" class="port-input" value="${link.old_port}" onchange="updLink(${link.id}, 'old_port', this.value)"></td>
+                                <td><input type="text" class="port-input" style="width:160px;" value="${link.upstream_device||''}" onchange="updLink(${link.id}, 'upstream_device', this.value)"></td>
+                                <td><input type="number" class="port-input" value="${link.upstream_port||''}" onchange="updLink(${link.id}, 'upstream_port', this.value)"></td>""",
+"""<tr data-lid="${link.id}">
+                                <td><input type="number" class="port-input" value="${link.old_port}" onchange="updLink(${link.id}, 'old_port', this.value)"></td>
+                                <td><select class="port-input devsel" data-cur="${link.upstream_device||''}" onchange="updLink(${link.id}, 'upstream_device', this.value)"></select></td>
+                                <td>${devLocSync(link.upstream_device)?'📍 '+devLocSync(link.upstream_device):''} <a href="#" data-dev="${link.upstream_device||''}" onclick="openDevTools(this.dataset.dev);return false;">🔗</a></td>
+                                <td><input type="number" class="port-input" value="${link.upstream_port||''}" onchange="updLink(${link.id}, 'upstream_port', this.value)"></td>""",
+    'uplink: select + адрес')
+
+rep('<thead><tr><th>Порт</th><th>Устройство</th><th>Порт устройства</th><th></th></tr></thead>',
+    '<thead><tr><th>Порт</th><th>Устройство</th><th>Адрес</th><th>Порт устройства</th><th></th></tr></thead>',
+    'uplink: шапка с адресом')
+
+# 3) Планировщик: downlink-таблица — select устройств + адрес + 🔗
+rep("""<tr>
+                                <td><input type="number" class="port-input" value="${link.old_port}" onchange="updLink(${link.id}, 'old_port', this.value)"></td>
+                                <td><input type="text" class="port-input" style="width:160px;" value="${link.upstream_device||''}" onchange="updLink(${link.id}, 'upstream_device', this.value)"></td>
+                                <td><input type="number" class="port-input" value="${link.upstream_port||''}" onchange="updLink(${link.id}, 'upstream_port', this.value)"></td>
+                                <td><input type="number" class="port-input" value="${link.new_port||''}" onchange="updLink(${link.id}, 'new_port', this.value)"></td>""",
+"""<tr>
+                                <td><input type="number" class="port-input" value="${link.old_port}" onchange="updLink(${link.id}, 'old_port', this.value)"></td>
+                                <td><select class="port-input devsel" data-cur="${link.upstream_device||''}" onchange="updLink(${link.id}, 'upstream_device', this.value)"></select></td>
+                                <td>${devLocSync(link.upstream_device)?'📍 '+devLocSync(link.upstream_device):''} <a href="#" data-dev="${link.upstream_device||''}" onclick="openDevTools(this.dataset.dev);return false;">🔗</a></td>
+                                <td><input type="number" class="port-input" value="${link.upstream_port||''}" onchange="updLink(${link.id}, 'upstream_port', this.value)"></td>
+                                <td><input type="number" class="port-input" value="${link.new_port||''}" onchange="updLink(${link.id}, 'new_port', this.value)"></td>""",
+    'downlink: select + адрес')
+
+rep('<thead><tr><th>Порт</th><th>Устройство</th><th>Порт устройства</th><th>Новый порт</th><th></th></tr></thead>',
+    '<thead><tr><th>Порт</th><th>Устройство</th><th>Адрес</th><th>Порт устройства</th><th>Новый порт</th><th></th></tr></thead>',
+    'downlink: шапка с адресом')
+
+# 4) Наполнение селектов после отрисовки таблиц
+rep('    renderReminders(order, links);',
+"""    document.querySelectorAll('.devsel').forEach(function(sel){
+      fillDevSelect(sel, sel.dataset.cur||'');
+    });
+    renderReminders(order, links);""", 'наполнение devsel')
+
+# 5) Тулза: приём цели со страницы планировщика
+if 'toolz_tgt' not in src:
+    rep('function pin(){',
+"""var _t=sessionStorage.getItem('toolz_tgt');
+if(_t){
+  sessionStorage.removeItem('toolz_tgt');
+  var _tt=sessionStorage.getItem('toolz_tool');
+  if(_tt){ sessionStorage.removeItem('toolz_tool'); }
+  window.addEventListener('DOMContentLoaded', function(){
+    document.getElementById('tgt').value=_t;
+    if(_tt){ document.getElementById('tool').value=_tt; }
+  });
+}
+function pin(){""", 'tools: приём цели')
+
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
 print('update.py отработал, синтаксис ОК')
