@@ -1,4 +1,4 @@
-import ast, json
+import ast
 src = open('swh.py').read()
 def rep(old, new, label):
     global src
@@ -7,181 +7,142 @@ def rep(old, new, label):
     else:
         print('  ПРОПУСК:', label)
 
-D=[
-('Тура','10.163.201.40',[(2101,'красный'),(2102,'оранжевый'),(2103,'желтый'),(2104,'зеленый'),(2105,'голубой'),(2106,'синий'),(2107,'фиолетовый'),(2109,'Зона 09'),(2110,'Морозово'),(2111,'Зона 11'),(2112,'Зона 12'),(2113,'Зона 13'),(2115,'Север'),(2116,'Резерв'),(2117,'ЖК Клевер к1'),(2118,'ЖК Клевер к2'),(2119,'ЖК Клевер к3'),(2120,'ЖК Клевер к4')]),
-('Михеенко','10.163.202.13',[(2201,'красный'),(2202,'оранжевый'),(2203,'желтый'),(2204,'зеленый'),(2205,'голубой'),(2206,'синий'),(2207,'фиолетовый'),(2208,'Зона 08 Лихачева 6')]),
-('Королёва','10.163.203.102',[(2301,'красный'),(2302,'оранжевый'),(2303,'желтый'),(2304,'зеленый'),(2305,'голубой'),(2306,'синий'),(2307,'фиолетовый'),(2308,'Зона 08')]),
-('Черняховка','10.163.204.34',[(2401,'красный'),(2402,'оранжевый'),(2403,'желтый'),(2404,'зеленый'),(2405,'голубой'),(2406,'синий'),(2407,'фиолетовый'),(2409,'Олимп к. 1-3'),(2410,'Олимп к. 4-5'),(2411,'Олимп к. 6-7')]),
-('Жучки','10.163.206.8',[(2601,'красный'),(2602,'оранжевый'),(2603,'PON 1'),(2604,'PON 2')]),
-('Горбуновка, ОРГРЭС','10.163.207.16',[(2701,'красный'),(2702,'оранжевый'),(2703,'желтый'),(2704,'PON Горбуновская'),(2705,'PON Васильки')]),
-('ГОП','10.163.208.16',[(2801,'красный'),(2802,'оранжевый'),(2803,'PON 1 Гоп'),(2804,'новые дома')]),
-('Сегмент 02 Заречный','10.163.2.12',[(2020,'Сегмент 02-01 МКД'),(2021,'Сегмент 02-02 PON'),(2022,'Сегмент 02-03 PON'),(2023,'Сегмент 02-04 Зубцово'),(2024,'Сегмент 02-05'),(2025,'Сегмент 02-06'),(2026,'Сегмент 02-07'),(2027,'Сегмент 02-08'),(2028,'Сегмент 02-09'),(2029,'Сегмент 02-10')]),
-('Сегмент 03 Росхмель','10.163.3.1',[(2030,'Сегмент 03-01 МКД'),(2031,'Сегмент 03-02'),(2032,'Сегмент 03-03'),(2033,'Сегмент 03-04'),(2034,'Сегмент 03-05'),(2035,'Сегмент 03-06'),(2036,'Сегмент 03-07'),(2037,'Сегмент 03-08'),(2038,'Сегмент 03-09'),(2039,'Сегмент 03-10')]),
-('Сегмент 04 СП Северный','10.163.4.1',[(2040,'Сегмент 04-01 PON'),(2041,'Сегмент 04-02'),(2042,'Сегмент 04-03'),(2043,'Сегмент 04-04'),(2044,'Сегмент 04-05'),(2045,'Сегмент 04-06'),(2046,'Сегмент 04-07'),(2047,'Сегмент 04-08'),(2048,'Сегмент 04-09'),(2049,'Сегмент 04-10')]),
-('Сегмент 05 Мостовик, Васильевское','10.163.5.3',[(2050,'Сегмент 05-01 МКД'),(2051,'Сегмент 05-02 МКД'),(2052,'Сегмент 05-03 МКД'),(2053,'Сегмент 05-04 МКД'),(2054,'Сегмент 05-05 PON'),(2055,'Сегмент 05-06 PON'),(2056,'Сегмент 05-07 МКД'),(2057,'Сегмент 05-08 PON'),(2058,'Сегмент 05-09 PON'),(2059,'Сегмент 05-10 PON')]),
-('Сегмент 06 Абрамцево','10.163.6.1',[(2060,'Сегмент 06-01 PON'),(2061,'Сегмент 06-02'),(2062,'Сегмент 06-03'),(2063,'Сегмент 06-04'),(2064,'Сегмент 06-05'),(2065,'Сегмент 06-06'),(2066,'Сегмент 06-07'),(2067,'Сегмент 06-08'),(2068,'Сегмент 06-09'),(2069,'Сегмент 06-10')]),
-('Сегмент 07 Семхоз','10.163.7.5',[(2070,'Сегмент 07-01 PON'),(2071,'Сегмент 07-02 PON'),(2072,'Сегмент 07-03'),(2073,'Сегмент 07-04'),(2074,'Сегмент 07-05'),(2075,'Сегмент 07-06'),(2076,'Сегмент 07-07'),(2077,'Сегмент 07-08'),(2078,'Сегмент 07-09'),(2079,'Сегмент 07-10')]),
-('Сегмент 08 Ашукино','10.163.8.34',[(2080,'Сегмент 08-01 PON запад'),(2081,'Сегмент 08-02 PON восток'),(2082,'Сегмент 08-03 МКД ВЧ 3641'),(2083,'Сегмент 08-04'),(2084,'Сегмент 08-05'),(2085,'Сегмент 08-06'),(2086,'Сегмент 08-07'),(2087,'Сегмент 08-08'),(2088,'Сегмент 08-09'),(2089,'Сегмент 08-10')]),
-('Сегмент 09 КП Хотьковский','10.163.9.2',[(2090,'Сегмент 09-01 PON'),(2092,'Сегмент 09-03 PON'),(2093,'Сегмент 09-04'),(2094,'Сегмент 09-05'),(2095,'Сегмент 09-06'),(2096,'Сегмент 09-07'),(2097,'Сегмент 09-08'),(2098,'Сегмент 09-09'),(2099,'Сегмент 09-10')]),
-('Сегмент 11 SP-6 Vaksina','10.163.11.38',[(2110,'Сегмент 11-01 МКД'),(2111,'Сегмент 11-02 МКД'),(2112,'Сегмент 11-03 МКД'),(2113,'Сегмент 11-04 МКД'),(2114,'Сегмент 11-05 PON'),(2115,'Сегмент 11-06'),(2116,'Сегмент 11-07'),(2117,'Сегмент 11-08'),(2118,'Сегмент 11-09'),(2119,'Сегмент 11-10')]),
-('Сегмент 12 СП Кировка','10.163.12.9',[(2120,'Сегмент 12-01 PON Гражданка'),(2121,'Сегмент 12-02 МАЯК'),(2122,'Сегмент 12-03 PON Кировка'),(2123,'Сегмент 12-04 PON Дружба'),(2124,'Сегмент 12-05'),(2125,'Сегмент 12-06'),(2126,'Сегмент 12-07'),(2127,'Сегмент 12-08'),(2128,'Сегмент 12-09'),(2129,'Сегмент 12-10')]),
-('Сегмент 13 Васильевское','10.163.13.8',[(2130,'Сегмент 13-01 МКД'),(2131,'Сегмент 13-02 PON'),(2132,'Сегмент 13-03'),(2133,'Сегмент 13-04'),(2134,'Сегмент 13-05'),(2135,'Сегмент 13-06'),(2136,'Сегмент 13-07'),(2137,'Сегмент 13-08'),(2138,'Сегмент 13-09'),(2139,'Сегмент 13-10')]),
-('Сегмент 14 СП Владимирская','10.163.14.5',[(2140,'Сегмент 14-01 PON'),(2141,'Сегмент 14-02'),(2142,'Сегмент 14-03'),(2143,'Сегмент 14-04'),(2144,'Сегмент 14-05'),(2145,'Сегмент 14-06'),(2146,'Сегмент 14-07'),(2147,'Сегмент 14-08'),(2148,'Сегмент 14-09'),(2149,'Сегмент 14-10')]),
-('Сегмент 15 Зубцово','10.163.15.3',[(2150,'Сегмент 15-01 PON'),(2151,'Сегмент 15-02'),(2152,'Сегмент 15-03'),(2153,'Сегмент 15-04'),(2154,'Сегмент 15-05'),(2155,'Сегмент 15-06'),(2156,'Сегмент 15-07'),(2157,'Сегмент 15-08'),(2158,'Сегмент 15-09'),(2159,'Сегмент 15-10')]),
-('Сегмент 16 Воронцово','10.163.16.2',[(2160,'Сегмент 16-01 PON'),(2161,'Сегмент 16-02'),(2162,'Сегмент 16-03'),(2163,'Сегмент 16-04'),(2164,'Сегмент 16-05'),(2165,'Сегмент 16-06'),(2166,'Сегмент 16-07'),(2167,'Сегмент 16-08'),(2168,'Сегмент 16-09'),(2169,'Сегмент 16-10')]),
-('Сегмент 17 Афанасовский','10.163.17.1',[(2170,'Сегмент 17-01 МКД'),(2171,'Сегмент 17-02 PON'),(2172,'Сегмент 17-03'),(2173,'Сегмент 17-04'),(2174,'Сегмент 17-05'),(2175,'Сегмент 17-06'),(2176,'Сегмент 17-07'),(2177,'Сегмент 17-08'),(2178,'Сегмент 17-09'),(2179,'Сегмент 17-10')]),
-]
-FLAT = [[r, ip, seg, v] for r, ip, rows in D for v, seg in rows]
+# 1) Серверный разбор xlsx/csv + эндпоинт импорта
+if "'/api/vlans/import'" not in src:
+    IMP = '''VL_NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 
-# 1) Статический файл с данными (канал №2)
-import os
-os.makedirs('static', exist_ok=True)
-open('static/vlans.js', 'w').write('var VLAN_DATA=' + json.dumps(FLAT, ensure_ascii=False) + ';')
-print('ok: static/vlans.js (' + str(len(FLAT)) + ' строк)')
+def _parse_xlsx_bytes(b):
+    import zipfile
+    import io
+    import xml.etree.ElementTree as ET
+    z = zipfile.ZipFile(io.BytesIO(b))
+    shared = []
+    if 'xl/sharedStrings.xml' in z.namelist():
+        r = ET.fromstring(z.read('xl/sharedStrings.xml'))
+        for si in r.findall(VL_NS + 'si'):
+            shared.append(''.join(t.text or '' for t in si.iter(VL_NS + 't')))
+    sheet = None
+    for n in z.namelist():
+        if n.startswith('xl/worksheets/sheet'):
+            sheet = n
+            break
+    if not sheet:
+        return []
+    r = ET.fromstring(z.read(sheet))
+    rows = []
+    for row in r.iter(VL_NS + 'row'):
+        vals = []
+        for c in row.findall(VL_NS + 'c'):
+            t = c.get('t')
+            v = c.find(VL_NS + 'v')
+            isv = c.find(VL_NS + 'is')
+            if t == 's' and v is not None:
+                vals.append(shared[int(v.text)])
+            elif t == 'inlineStr' and isv is not None:
+                vals.append(''.join(x.text or '' for x in isv.iter(VL_NS + 't')))
+            elif v is not None:
+                vals.append(v.text or '')
+            else:
+                vals.append('')
+        rows.append(vals)
+    return rows
 
-# 2) Сид в сервере + дозаполнение БД (канал №3), если раньше не встал
-if 'SEED_VLANS' not in src:
-    seed = 'SEED_VLANS = ' + repr(D) + '''
+def _parse_csv_bytes(b):
+    t = None
+    for enc in ('utf-8-sig', 'cp1251', 'utf-8'):
+        try:
+            t = b.decode(enc)
+            break
+        except Exception:
+            continue
+    if t is None:
+        t = b.decode('utf-8', 'ignore')
+    rows = []
+    for line in t.splitlines():
+        if not line.strip():
+            continue
+        sep = '\\t' if '\\t' in line else (';' if line.count(';') >= line.count(',') else ',')
+        rows.append([x.strip().strip('"') for x in line.split(sep)])
+    return rows
 
-def ensure_vlans(conn):
-    n = conn.execute('SELECT COUNT(*) c FROM region_vlans').fetchone()['c']
-    if n == 0:
-        for region, ip, rows in SEED_VLANS:
-            for vlan, seg in rows:
-                conn.execute('INSERT OR IGNORE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
-                             (region, ip, seg, vlan))
-        conn.commit()
-
-'''
-    idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + seed + src[idx:]
-    print('ok: SEED_VLANS')
-if 'ensure_vlans(conn)' not in src:
-    rep("""    if request.method == 'GET':
-        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()""",
-"""    if request.method == 'GET':
-        ensure_vlans(conn)
-        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()""",
-        'api vlans: ensure')
-
-# 3) Консолидированный JS страницы: 3 канала + аварийная кнопка
-NEWJS = r'''var ROWS=[];
-function norm(s){ return (s||'').toLowerCase().replace(/[^0-9a-zа-яё./-]/g,''); }
-function baseRows(){
-  var d=window.VLAN_DATA||[];
-  return d.map(function(r){ return {region:r[0], switch_ip:r[1], segment:r[2], vlan:r[3]}; });
-}
-function mergeApi(cb){
-  fetch('/api/vlans').then(function(r){return r.json();}).then(function(rows){
-    (rows||[]).forEach(function(x){
-      var ex=ROWS.some(function(r){ return r.region===x.region && String(r.vlan)===String(x.vlan); });
-      if(!ex){ ROWS.push(x); }
-    });
-    if(cb){ cb(); }
-    render();
-  }).catch(function(){ if(cb){ cb(); } render(); });
-}
-function loadStatic(cb){
-  var s=document.createElement('script');
-  s.src='/static/vlans.js?ts='+Date.now();
-  s.onload=function(){ cb(); };
-  s.onerror=function(){ cb(); };
-  document.head.appendChild(s);
-}
-function load(){
-  var qp=new URLSearchParams(location.search).get('q')||'';
-  if(qp){ document.getElementById('q').value=qp; }
-  ROWS=baseRows();
-  render();
-  mergeApi(function(){
-    if(ROWS.length===0){
-      loadStatic(function(){ ROWS=baseRows(); mergeApi(null); });
-    }
-  });
-}
-function reloadVlans(){
-  document.getElementById('cnt').textContent=' загружаю...';
-  loadStatic(function(){ ROWS=baseRows(); mergeApi(null); });
-}
-function render(){
-  var q=norm(document.getElementById('q').value);
-  var f=ROWS.filter(function(r){
-    if(!q) return true;
-    return norm(r.region).indexOf(q)>=0 ||
-           norm(r.segment).indexOf(q)>=0 ||
-           norm(r.switch_ip).indexOf(q)>=0 ||
-           String(r.vlan).indexOf(q)>=0;
-  });
-  document.getElementById('cnt').textContent=' всего: '+ROWS.length+', найдено: '+f.length;
-  var w=document.getElementById('vwarn');
-  if(w){ w.style.display=ROWS.length? 'none':'block'; }
-  document.getElementById('tb').innerHTML=f.map(function(r){
-    return '<tr><td>'+r.region+'</td><td>'+r.switch_ip+'</td><td>'+r.segment+'</td><td><b>'+r.vlan+'</b></td>'
-      +'<td><button class="btn" style="background:#3498db;" onclick="navigator.clipboard.writeText(\''+r.vlan+'\');alert(\'VLAN скопирован\')">📋</button> '
-      +'<button class="btn" style="background:#27ae60;" onclick="openSw(\''+r.switch_ip+'\')">🔗 свитч</button></td></tr>';
-  }).join('');
-}
-function openSw(ip){
-  sessionStorage.setItem('toolz_tgt', ip);
-  sessionStorage.setItem('toolz_tool', 'ssh');
-  location.href='/tools';
-}
-function addRow(){
-  var b={region:document.getElementById('nReg').value, switch_ip:document.getElementById('nIp').value,
-         segment:document.getElementById('nSeg').value, vlan:parseInt(document.getElementById('nVlan').value)||0,
-         pin:localStorage.getItem('swhpin')||prompt('PIN:')||''};
-  fetch('/api/vlans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})
-  .then(function(r){return r.json();}).then(function(res){ if(res.ok){ load(); } else { alert('Ошибка: '+(res.error||'')); } });
-}
-load();'''
-i = src.find('var VLAN_DATA=')
-if i < 0:
-    i = src.find('var ROWS=[];')
-j = src.find('\nload();', i) if i >= 0 else -1
-if i >= 0 and j > i:
-    src = src[:i] + NEWJS + src[j+len('\nload();'):]
-    print('ok: JS страницы консолидирован')
-else:
-    print('ПРОПУСК: якорь JS vlans')
-
-# 4) Красная плашка с аварийной кнопкой
-if 'id="vwarn"' not in src:
-    rep('<div class="card"><table>',
-"""<div id="vwarn" class="card" style="display:none;background:#ffebee;border:1px solid #e57373;">
-⚠️ Данные не загрузились. <button class="btn" style="background:#e57373;" onclick="reloadVlans()">🔄 Загрузить данные</button>
-<small>(или Ctrl+F5; если не помогло — «Тянуть обновление с GitHub»)</small></div>
-<div class="card"><table>""", 'плашка vwarn')
-
-# 5) Диагностика: счётчик VLANов
-if 'def _vlans_count' not in src:
-    helper = '''
-def _vlans_count():
+@app.route('/api/vlans/import', methods=['POST'])
+def vlans_import():
+    import json as _json
+    if request.form.get('pin') != ADMIN_PIN:
+        return jsonify({'error': 'pin'}), 403
+    f = request.files.get('file')
+    if not f:
+        return jsonify({'error': 'нет файла'}), 400
+    b = f.read()
+    fn = (f.filename or '').lower()
     try:
-        conn = get_db()
-        n = conn.execute('SELECT COUNT(*) c FROM region_vlans').fetchone()['c']
-        conn.close()
-        return n
+        if fn.endswith('.xlsx'):
+            rows = _parse_xlsx_bytes(b)
+        elif fn.endswith('.csv') or fn.endswith('.txt'):
+            rows = _parse_csv_bytes(b)
+        else:
+            return jsonify({'error': 'нужен .xlsx или .csv'}), 400
+    except Exception as e:
+        return jsonify({'error': 'разбор файла: ' + str(e)[:200]}), 400
+    conn = get_db()
+    n = 0
+    for r in rows:
+        if len(r) < 4:
+            continue
+        region = (r[0] or '').strip()
+        ip = (r[1] or '').strip()
+        seg = (r[2] or '').strip()
+        vl = (r[3] or '').strip()
+        if not vl.isdigit():
+            continue
+        if region.lower().startswith('район'):
+            continue
+        conn.execute('INSERT OR REPLACE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
+                     (region, ip, seg, int(vl)))
+        n += 1
+    conn.commit()
+    allr = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()
+    conn.close()
+    try:
+        import os as _os
+        _os.makedirs('static', exist_ok=True)
+        open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'static', 'vlans.js'), 'w').write(
+            'var VLAN_DATA=' + _json.dumps([[x['region'], x['switch_ip'], x['segment'], x['vlan']] for x in allr], ensure_ascii=False) + ';')
     except Exception:
-        return -1
+        pass
+    return jsonify({'ok': True, 'added': n, 'total': len(allr)})
+
 
 '''
     idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + helper + src[idx:]
-    print('ok: _vlans_count')
-if "'vlans_count'" not in src:
-    rep("'routes_missing': [e for e in ('/', '/map', '/commands', '/admin', '/stock',",
-        "'vlans_count': _vlans_count(),\n            'routes_missing': [e for e in ('/', '/map', '/commands', '/admin', '/stock',",
-        'диагностика: vlans_count')
+    src = src[:idx] + IMP + src[idx:]
+    print('ok: эндпоинт импорта xlsx/csv')
 
-# 6) Показ счётчика в админке
-ajs_path = os.path.join('static', 'admin.js')
-ajs = open(ajs_path).read() if os.path.exists(ajs_path) else ''
-if 'VLANов в БД' not in ajs:
-    ajs = ajs.replace("    L.push('UI:');",
-"""    L.push('VLANов в БД: '+(res.vlans_count!==undefined? res.vlans_count : '?'));
-    L.push('UI:');""", 1)
-    open(ajs_path, 'w').write(ajs)
-    print('ok: admin.js показывает vlans_count')
+# 2) Карточка импорта на странице /vlans
+if 'id="impFile"' not in src:
+    rep('<div class="card"><b>➕ Добавить строку</b>',
+"""<div class="card"><b>📥 Импорт файла (xlsx / csv)</b><br>
+<input type="file" id="impFile" accept=".xlsx,.csv,.txt">
+<button class="btn" style="background:#8e44ad;" onclick="impVlans()">Загрузить и импортировать</button>
+<span id="impMsg"></span>
+<div style="color:#7f8c8d;font-size:13px;margin-top:4px;">Колонки: Район | IP свитча | Сегмент | Номер VLAN (как в вашем файле). Повторный импорт обновляет строки без дублей.</div></div>
+<div class="card"><b>➕ Добавить строку</b>""", 'карточка импорта')
+
+    rep('function addRow(){',
+"""function impVlans(){
+  var inp=document.getElementById('impFile');
+  var f=inp.files[0];
+  if(!f){ alert('Выберите файл xlsx или csv'); return; }
+  var fd=new FormData();
+  fd.append('file', f);
+  fd.append('pin', localStorage.getItem('swhpin')||prompt('PIN:')||'');
+  document.getElementById('impMsg').textContent='Импортирую...';
+  fetch('/api/vlans/import',{method:'POST', body:fd}).then(function(r){return r.json();}).then(function(res){
+    document.getElementById('impMsg').textContent=res.ok? ('Готово: добавлено '+res.added+', всего '+res.total) : ('Ошибка: '+(res.error||''));
+    if(res.ok){ load(); }
+  }).catch(function(e){ document.getElementById('impMsg').textContent='Ошибка: '+e.message; });
+}
+function addRow(){""", 'JS impVlans')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
