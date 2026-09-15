@@ -1,4 +1,4 @@
-import ast, os
+import ast, sqlite3
 src = open('swh.py').read()
 def rep(old, new, label):
     global src
@@ -7,82 +7,143 @@ def rep(old, new, label):
     else:
         print('  ПРОПУСК:', label)
 
-# 1) openDevTools в common.js
-ajs_path = os.path.join('static', 'common.js')
-ajs = open(ajs_path).read() if os.path.exists(ajs_path) else ''
-if 'openDevTools' not in ajs:
-    ajs += '''
-function openDevTools(s){
-  if(!s){ alert('Устройство не указано'); return; }
-  var ip=(s.match(/(\\d{1,3}\\.){3}\\d{1,3}/)||[null])[0];
-  if(!ip && window.devArr){
-    var d=devArr.find(function(x){ return x.name===s; });
-    if(d){ ip=d.ip_address; }
-  }
-  if(!ip){ alert('Не найден IP устройства: '+s); return; }
+D=[
+('Тура','10.163.201.40',[(2101,'красный'),(2102,'оранжевый'),(2103,'желтый'),(2104,'зеленый'),(2105,'голубой'),(2106,'синий'),(2107,'фиолетовый'),(2109,'Зона 09'),(2110,'Морозово'),(2111,'Зона 11'),(2112,'Зона 12'),(2113,'Зона 13'),(2115,'Север'),(2116,'Резерв'),(2117,'ЖК Клевер к1'),(2118,'ЖК Клевер к2'),(2119,'ЖК Клевер к3'),(2120,'ЖК Клевер к4')]),
+('Михеенко','10.163.202.13',[(2201,'красный'),(2202,'оранжевый'),(2203,'желтый'),(2204,'зеленый'),(2205,'голубой'),(2206,'синий'),(2207,'фиолетовый'),(2208,'Зона 08 Лихачева 6')]),
+('Королёва','10.163.203.102',[(2301,'красный'),(2302,'оранжевый'),(2303,'желтый'),(2304,'зеленый'),(2305,'голубой'),(2306,'синий'),(2307,'фиолетовый'),(2308,'Зона 08')]),
+('Черняховка','10.163.204.34',[(2401,'красный'),(2402,'оранжевый'),(2403,'желтый'),(2404,'зеленый'),(2405,'голубой'),(2406,'синий'),(2407,'фиолетовый'),(2409,'Олимп к. 1-3'),(2410,'Олимп к. 4-5'),(2411,'Олимп к. 6-7')]),
+('Жучки','10.163.206.8',[(2601,'красный'),(2602,'оранжевый'),(2603,'PON 1'),(2604,'PON 2')]),
+('Горбуновка, ОРГРЭС','10.163.207.16',[(2701,'красный'),(2702,'оранжевый'),(2703,'желтый'),(2704,'PON Горбуновская'),(2705,'PON Васильки')]),
+('ГОП','10.163.208.16',[(2801,'красный'),(2802,'оранжевый'),(2803,'PON 1 Гоп'),(2804,'новые дома')]),
+('Сегмент 02 Заречный','10.163.2.12',[(2020,'Сегмент 02-01 МКД'),(2021,'Сегмент 02-02 PON'),(2022,'Сегмент 02-03 PON'),(2023,'Сегмент 02-04 Зубцово'),(2024,'Сегмент 02-05'),(2025,'Сегмент 02-06'),(2026,'Сегмент 02-07'),(2027,'Сегмент 02-08'),(2028,'Сегмент 02-09'),(2029,'Сегмент 02-10')]),
+('Сегмент 03 Росхмель','10.163.3.1',[(2030,'Сегмент 03-01 МКД'),(2031,'Сегмент 03-02'),(2032,'Сегмент 03-03'),(2033,'Сегмент 03-04'),(2034,'Сегмент 03-05'),(2035,'Сегмент 03-06'),(2036,'Сегмент 03-07'),(2037,'Сегмент 03-08'),(2038,'Сегмент 03-09'),(2039,'Сегмент 03-10')]),
+('Сегмент 04 СП Северный','10.163.4.1',[(2040,'Сегмент 04-01 PON'),(2041,'Сегмент 04-02'),(2042,'Сегмент 04-03'),(2043,'Сегмент 04-04'),(2044,'Сегмент 04-05'),(2045,'Сегмент 04-06'),(2046,'Сегмент 04-07'),(2047,'Сегмент 04-08'),(2048,'Сегмент 04-09'),(2049,'Сегмент 04-10')]),
+('Сегмент 05 Мостовик, Васильевское','10.163.5.3',[(2050,'Сегмент 05-01 МКД'),(2051,'Сегмент 05-02 МКД'),(2052,'Сегмент 05-03 МКД'),(2053,'Сегмент 05-04 МКД'),(2054,'Сегмент 05-05 PON'),(2055,'Сегмент 05-06 PON'),(2056,'Сегмент 05-07 МКД'),(2057,'Сегмент 05-08 PON'),(2058,'Сегмент 05-09 PON'),(2059,'Сегмент 05-10 PON')]),
+('Сегмент 06 Абрамцево','10.163.6.1',[(2060,'Сегмент 06-01 PON'),(2061,'Сегмент 06-02'),(2062,'Сегмент 06-03'),(2063,'Сегмент 06-04'),(2064,'Сегмент 06-05'),(2065,'Сегмент 06-06'),(2066,'Сегмент 06-07'),(2067,'Сегмент 06-08'),(2068,'Сегмент 06-09'),(2069,'Сегмент 06-10')]),
+('Сегмент 07 Семхоз','10.163.7.5',[(2070,'Сегмент 07-01 PON'),(2071,'Сегмент 07-02 PON'),(2072,'Сегмент 07-03'),(2073,'Сегмент 07-04'),(2074,'Сегмент 07-05'),(2075,'Сегмент 07-06'),(2076,'Сегмент 07-07'),(2077,'Сегмент 07-08'),(2078,'Сегмент 07-09'),(2079,'Сегмент 07-10')]),
+('Сегмент 08 Ашукино','10.163.8.34',[(2080,'Сегмент 08-01 PON запад'),(2081,'Сегмент 08-02 PON восток'),(2082,'Сегмент 08-03 МКД ВЧ 3641'),(2083,'Сегмент 08-04'),(2084,'Сегмент 08-05'),(2085,'Сегмент 08-06'),(2086,'Сегмент 08-07'),(2087,'Сегмент 08-08'),(2088,'Сегмент 08-09'),(2089,'Сегмент 08-10')]),
+('Сегмент 09 КП Хотьковский','10.163.9.2',[(2090,'Сегмент 09-01 PON'),(2092,'Сегмент 09-03 PON'),(2093,'Сегмент 09-04'),(2094,'Сегмент 09-05'),(2095,'Сегмент 09-06'),(2096,'Сегмент 09-07'),(2097,'Сегмент 09-08'),(2098,'Сегмент 09-09'),(2099,'Сегмент 09-10')]),
+('Сегмент 11 SP-6 Vaksina','10.163.11.38',[(2110,'Сегмент 11-01 МКД'),(2111,'Сегмент 11-02 МКД'),(2112,'Сегмент 11-03 МКД'),(2113,'Сегмент 11-04 МКД'),(2114,'Сегмент 11-05 PON'),(2115,'Сегмент 11-06'),(2116,'Сегмент 11-07'),(2117,'Сегмент 11-08'),(2118,'Сегмент 11-09'),(2119,'Сегмент 11-10')]),
+('Сегмент 12 СП Кировка','10.163.12.9',[(2120,'Сегмент 12-01 PON Гражданка'),(2121,'Сегмент 12-02 МАЯК'),(2122,'Сегмент 12-03 PON Кировка'),(2123,'Сегмент 12-04 PON Дружба'),(2124,'Сегмент 12-05'),(2125,'Сегмент 12-06'),(2126,'Сегмент 12-07'),(2127,'Сегмент 12-08'),(2128,'Сегмент 12-09'),(2129,'Сегмент 12-10')]),
+('Сегмент 13 Васильевское','10.163.13.8',[(2130,'Сегмент 13-01 МКД'),(2131,'Сегмент 13-02 PON'),(2132,'Сегмент 13-03'),(2133,'Сегмент 13-04'),(2134,'Сегмент 13-05'),(2135,'Сегмент 13-06'),(2136,'Сегмент 13-07'),(2137,'Сегмент 13-08'),(2138,'Сегмент 13-09'),(2139,'Сегмент 13-10')]),
+('Сегмент 14 СП Владимирская','10.163.14.5',[(2140,'Сегмент 14-01 PON'),(2141,'Сегмент 14-02'),(2142,'Сегмент 14-03'),(2143,'Сегмент 14-04'),(2144,'Сегмент 14-05'),(2145,'Сегмент 14-06'),(2146,'Сегмент 14-07'),(2147,'Сегмент 14-08'),(2148,'Сегмент 14-09'),(2149,'Сегмент 14-10')]),
+('Сегмент 15 Зубцово','10.163.15.3',[(2150,'Сегмент 15-01 PON'),(2151,'Сегмент 15-02'),(2152,'Сегмент 15-03'),(2153,'Сегмент 15-04'),(2154,'Сегмент 15-05'),(2155,'Сегмент 15-06'),(2156,'Сегмент 15-07'),(2157,'Сегмент 15-08'),(2158,'Сегмент 15-09'),(2159,'Сегмент 15-10')]),
+('Сегмент 16 Воронцово','10.163.16.2',[(2160,'Сегмент 16-01 PON'),(2161,'Сегмент 16-02'),(2162,'Сегмент 16-03'),(2163,'Сегмент 16-04'),(2164,'Сегмент 16-05'),(2165,'Сегмент 16-06'),(2166,'Сегмент 16-07'),(2167,'Сегмент 16-08'),(2168,'Сегмент 16-09'),(2169,'Сегмент 16-10')]),
+('Сегмент 17 Афанасовский','10.163.17.1',[(2170,'Сегмент 17-01 МКД'),(2171,'Сегмент 17-02 PON'),(2172,'Сегмент 17-03'),(2173,'Сегмент 17-04'),(2174,'Сегмент 17-05'),(2175,'Сегмент 17-06'),(2176,'Сегмент 17-07'),(2177,'Сегмент 17-08'),(2178,'Сегмент 17-09'),(2179,'Сегмент 17-10')]),
+]
+
+conn = sqlite3.connect('switch_replacements.db')
+conn.execute('''CREATE TABLE IF NOT EXISTS region_vlans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    region TEXT, switch_ip TEXT, segment TEXT, vlan INTEGER,
+    UNIQUE(region, vlan))''')
+n = 0
+for region, ip, rows in D:
+    for vlan, seg in rows:
+        try:
+            conn.execute('INSERT OR IGNORE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
+                         (region, ip, seg, vlan))
+            n += 1
+        except Exception:
+            pass
+conn.commit()
+conn.close()
+print('ok: region_vlans заполнена (строк:', n, ')')
+
+# Страница и API
+if "'/vlans'" not in src:
+    VL = '''VLANS_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>🗂 VLANы по районам</title>
+<style>body{font-family:Arial;font-size:16px;margin:0;background:#f5f5f5;}
+.card{background:#fff;margin:10px;padding:14px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.15);}
+.big{font-size:22px;font-weight:600;}
+table{width:100%;border-collapse:collapse;}
+td,th{border:1px solid #ddd;padding:6px 8px;font-size:14px;text-align:left;}
+th{background:#eef3f7;}
+.btn{padding:8px 14px;border:none;border-radius:6px;color:#fff;cursor:pointer;margin:2px;}
+input{padding:10px;border:1px solid #ccc;border-radius:6px;font-size:16px;width:70%;}</style></head>
+<body>
+<div class="card big">🗂 VLANы по районам (помощь по прошивке свитчей)</div>
+<div class="card"><input id="q" placeholder="Поиск: район (Михеенко), VLAN (2301), сегмент (PON, Клевер), IP свитча..." oninput="render()">
+<span id="cnt"></span></div>
+<div class="card"><table><thead><tr><th>Район</th><th>Свитч</th><th>Сегмент</th><th>VLAN</th><th></th></tr></thead>
+<tbody id="tb"></tbody></table></div>
+<div class="card"><b>➕ Добавить строку</b><br>
+Район: <input id="nReg" style="width:140px;"> IP свитча: <input id="nIp" style="width:130px;">
+Сегмент: <input id="nSeg" style="width:180px;"> VLAN: <input id="nVlan" style="width:80px;">
+<button class="btn" style="background:#27ae60;" onclick="addRow()">Добавить</button></div>
+<script>
+var ROWS=[];
+function load(){ fetch('/api/vlans').then(function(r){return r.json();}).then(function(rows){ ROWS=rows; render(); }); }
+function render(){
+  var q=(document.getElementById('q').value||'').toLowerCase().trim();
+  var f=ROWS.filter(function(r){
+    if(!q) return true;
+    return (r.region||'').toLowerCase().indexOf(q)>=0 ||
+           (r.segment||'').toLowerCase().indexOf(q)>=0 ||
+           (r.switch_ip||'').indexOf(q)>=0 ||
+           String(r.vlan).indexOf(q)>=0;
+  });
+  document.getElementById('cnt').textContent=' найдено: '+f.length;
+  document.getElementById('tb').innerHTML=f.map(function(r){
+    return '<tr><td>'+r.region+'</td><td>'+r.switch_ip+'</td><td>'+r.segment+'</td><td><b>'+r.vlan+'</b></td>'
+      +'<td><button class="btn" style="background:#3498db;" onclick="navigator.clipboard.writeText(\\''+r.vlan+'\\');alert(\\'VLAN скопирован\\')">📋</button> '
+      +'<button class="btn" style="background:#27ae60;" onclick="openSw(\\''+r.switch_ip+'\\')">🔗 свитч</button></td></tr>';
+  }).join('');
+}
+function openSw(ip){
   sessionStorage.setItem('toolz_tgt', ip);
   sessionStorage.setItem('toolz_tool', 'ssh');
   location.href='/tools';
 }
-'''
-    open(ajs_path, 'w').write(ajs)
-    print('ok: openDevTools')
-
-# 2) Планировщик: uplink-таблица — select устройств + адрес + 🔗
-rep("""<tr data-lid="${link.id}">
-                                <td><input type="number" class="port-input" value="${link.old_port}" onchange="updLink(${link.id}, 'old_port', this.value)"></td>
-                                <td><input type="text" class="port-input" style="width:160px;" value="${link.upstream_device||''}" onchange="updLink(${link.id}, 'upstream_device', this.value)"></td>
-                                <td><input type="number" class="port-input" value="${link.upstream_port||''}" onchange="updLink(${link.id}, 'upstream_port', this.value)"></td>""",
-"""<tr data-lid="${link.id}">
-                                <td><input type="number" class="port-input" value="${link.old_port}" onchange="updLink(${link.id}, 'old_port', this.value)"></td>
-                                <td><select class="port-input devsel" data-cur="${link.upstream_device||''}" onchange="updLink(${link.id}, 'upstream_device', this.value)"></select></td>
-                                <td>${devLocSync(link.upstream_device)?'📍 '+devLocSync(link.upstream_device):''} <a href="#" data-dev="${link.upstream_device||''}" onclick="openDevTools(this.dataset.dev);return false;">🔗</a></td>
-                                <td><input type="number" class="port-input" value="${link.upstream_port||''}" onchange="updLink(${link.id}, 'upstream_port', this.value)"></td>""",
-    'uplink: select + адрес')
-
-rep('<thead><tr><th>Порт</th><th>Устройство</th><th>Порт устройства</th><th></th></tr></thead>',
-    '<thead><tr><th>Порт</th><th>Устройство</th><th>Адрес</th><th>Порт устройства</th><th></th></tr></thead>',
-    'uplink: шапка с адресом')
-
-# 3) Планировщик: downlink-таблица — select устройств + адрес + 🔗
-rep("""<tr>
-                                <td><input type="number" class="port-input" value="${link.old_port}" onchange="updLink(${link.id}, 'old_port', this.value)"></td>
-                                <td><input type="text" class="port-input" style="width:160px;" value="${link.upstream_device||''}" onchange="updLink(${link.id}, 'upstream_device', this.value)"></td>
-                                <td><input type="number" class="port-input" value="${link.upstream_port||''}" onchange="updLink(${link.id}, 'upstream_port', this.value)"></td>
-                                <td><input type="number" class="port-input" value="${link.new_port||''}" onchange="updLink(${link.id}, 'new_port', this.value)"></td>""",
-"""<tr>
-                                <td><input type="number" class="port-input" value="${link.old_port}" onchange="updLink(${link.id}, 'old_port', this.value)"></td>
-                                <td><select class="port-input devsel" data-cur="${link.upstream_device||''}" onchange="updLink(${link.id}, 'upstream_device', this.value)"></select></td>
-                                <td>${devLocSync(link.upstream_device)?'📍 '+devLocSync(link.upstream_device):''} <a href="#" data-dev="${link.upstream_device||''}" onclick="openDevTools(this.dataset.dev);return false;">🔗</a></td>
-                                <td><input type="number" class="port-input" value="${link.upstream_port||''}" onchange="updLink(${link.id}, 'upstream_port', this.value)"></td>
-                                <td><input type="number" class="port-input" value="${link.new_port||''}" onchange="updLink(${link.id}, 'new_port', this.value)"></td>""",
-    'downlink: select + адрес')
-
-rep('<thead><tr><th>Порт</th><th>Устройство</th><th>Порт устройства</th><th>Новый порт</th><th></th></tr></thead>',
-    '<thead><tr><th>Порт</th><th>Устройство</th><th>Адрес</th><th>Порт устройства</th><th>Новый порт</th><th></th></tr></thead>',
-    'downlink: шапка с адресом')
-
-# 4) Наполнение селектов после отрисовки таблиц
-rep('    renderReminders(order, links);',
-"""    document.querySelectorAll('.devsel').forEach(function(sel){
-      fillDevSelect(sel, sel.dataset.cur||'');
-    });
-    renderReminders(order, links);""", 'наполнение devsel')
-
-# 5) Тулза: приём цели со страницы планировщика
-if 'toolz_tgt' not in src:
-    rep('function pin(){',
-"""var _t=sessionStorage.getItem('toolz_tgt');
-if(_t){
-  sessionStorage.removeItem('toolz_tgt');
-  var _tt=sessionStorage.getItem('toolz_tool');
-  if(_tt){ sessionStorage.removeItem('toolz_tool'); }
-  window.addEventListener('DOMContentLoaded', function(){
-    document.getElementById('tgt').value=_t;
-    if(_tt){ document.getElementById('tool').value=_tt; }
-  });
+function addRow(){
+  var b={region:document.getElementById('nReg').value, switch_ip:document.getElementById('nIp').value,
+         segment:document.getElementById('nSeg').value, vlan:parseInt(document.getElementById('nVlan').value)||0,
+         pin:localStorage.getItem('swhpin')||prompt('PIN:')||''};
+  fetch('/api/vlans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})
+  .then(function(r){return r.json();}).then(function(res){ if(res.ok){ load(); } else { alert('Ошибка: '+(res.error||'')); } });
 }
-function pin(){""", 'tools: приём цели')
+load();
+</script>
+</body></html>"""
+
+@app.route('/vlans')
+def vlans_page():
+    return render_template_string(VLANS_HTML)
+
+@app.route('/api/vlans', methods=['GET', 'POST'])
+def vlans_api():
+    conn = get_db()
+    if request.method == 'GET':
+        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+    d = request.json or {}
+    if d.get('pin') != ADMIN_PIN:
+        conn.close()
+        return jsonify({'error': 'pin'}), 403
+    try:
+        conn.execute('INSERT OR REPLACE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
+                     (d.get('region', ''), d.get('switch_ip', ''), d.get('segment', ''), int(d.get('vlan') or 0)))
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        return jsonify({'error': str(e)[:200]}), 400
+    conn.close()
+    return jsonify({'ok': True})
+
+
+'''
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + VL + src[idx:]
+    print('ok: страница /vlans и API')
+
+VL_LINK = '<a href="/vlans" class="nav-link">🗂 VLANы</a>'
+if VL_LINK not in src:
+    rep('<a href="/gen" class="nav-link">🧬 Команды</a>',
+        '<a href="/gen" class="nav-link">🧬 Команды</a>\n            ' + VL_LINK,
+        'ссылка VLANы в меню')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
