@@ -32,60 +32,70 @@ D=[
 ('Сегмент 17 Афанасовский','10.163.17.1',[(2170,'Сегмент 17-01 МКД'),(2171,'Сегмент 17-02 PON'),(2172,'Сегмент 17-03'),(2173,'Сегмент 17-04'),(2174,'Сегмент 17-05'),(2175,'Сегмент 17-06'),(2176,'Сегмент 17-07'),(2177,'Сегмент 17-08'),(2178,'Сегмент 17-09'),(2179,'Сегмент 17-10')]),
 ]
 
+# 0) Гарантированный дозаполн базы прямо сейчас
 conn = sqlite3.connect('switch_replacements.db')
 conn.execute('''CREATE TABLE IF NOT EXISTS region_vlans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     region TEXT, switch_ip TEXT, segment TEXT, vlan INTEGER,
     UNIQUE(region, vlan))''')
-n = 0
 for region, ip, rows in D:
     for vlan, seg in rows:
-        try:
-            conn.execute('INSERT OR IGNORE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
-                         (region, ip, seg, vlan))
-            n += 1
-        except Exception:
-            pass
+        conn.execute('INSERT OR IGNORE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
+                     (region, ip, seg, vlan))
 conn.commit()
 conn.close()
-print('ok: region_vlans заполнена (строк:', n, ')')
+print('ok: база VLAN дозаполнена')
 
-# Страница и API
-if "'/vlans'" not in src:
-    VL = '''VLANS_HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>🗂 VLANы по районам</title>
-<style>body{font-family:Arial;font-size:16px;margin:0;background:#f5f5f5;}
-.card{background:#fff;margin:10px;padding:14px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.15);}
-.big{font-size:22px;font-weight:600;}
-table{width:100%;border-collapse:collapse;}
-td,th{border:1px solid #ddd;padding:6px 8px;font-size:14px;text-align:left;}
-th{background:#eef3f7;}
-.btn{padding:8px 14px;border:none;border-radius:6px;color:#fff;cursor:pointer;margin:2px;}
-input{padding:10px;border:1px solid #ccc;border-radius:6px;font-size:16px;width:70%;}</style></head>
-<body>
-<div class="card big">🗂 VLANы по районам (помощь по прошивке свитчей)</div>
-<div class="card"><input id="q" placeholder="Поиск: район (Михеенко), VLAN (2301), сегмент (PON, Клевер), IP свитча..." oninput="render()">
-<span id="cnt"></span></div>
-<div class="card"><table><thead><tr><th>Район</th><th>Свитч</th><th>Сегмент</th><th>VLAN</th><th></th></tr></thead>
-<tbody id="tb"></tbody></table></div>
-<div class="card"><b>➕ Добавить строку</b><br>
-Район: <input id="nReg" style="width:140px;"> IP свитча: <input id="nIp" style="width:130px;">
-Сегмент: <input id="nSeg" style="width:180px;"> VLAN: <input id="nVlan" style="width:80px;">
-<button class="btn" style="background:#27ae60;" onclick="addRow()">Добавить</button></div>
-<script>
-var ROWS=[];
-function load(){ fetch('/api/vlans').then(function(r){return r.json();}).then(function(rows){ ROWS=rows; render(); }); }
+# 1) Сервер: сид-данные + самодозаполнение при пустой таблице
+if 'SEED_VLANS' not in src:
+    seed = 'SEED_VLANS = ' + repr(D) + '''
+
+def ensure_vlans(conn):
+    n = conn.execute('SELECT COUNT(*) c FROM region_vlans').fetchone()['c']
+    if n == 0:
+        for region, ip, rows in SEED_VLANS:
+            for vlan, seg in rows:
+                conn.execute('INSERT OR IGNORE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
+                             (region, ip, seg, vlan))
+        conn.commit()
+
+'''
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + seed + src[idx:]
+    print('ok: SEED_VLANS + ensure_vlans')
+
+rep("""    conn = get_db()
+    if request.method == 'GET':
+        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()""",
+"""    conn = get_db()
+    if request.method == 'GET':
+        ensure_vlans(conn)
+        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()""",
+    'api vlans: самодозаполнение')
+
+# 2) Клиент: всеядный поиск + счётчики + ?q=
+i = src.find('var ROWS=[];')
+j = src.find('\nload();', i) if i >= 0 else -1
+if i >= 0 and j > i:
+    NEWJS = '''var ROWS=[];
+function norm(s){ return (s||'').toLowerCase().replace(/[^0-9a-zа-яё./-]/g,''); }
+function load(){
+  var qp=new URLSearchParams(location.search).get('q')||'';
+  if(qp){ document.getElementById('q').value=qp; }
+  fetch('/api/vlans').then(function(r){return r.json();}).then(function(rows){ ROWS=rows; render(); });
+}
 function render(){
-  var q=(document.getElementById('q').value||'').toLowerCase().trim();
+  var q=norm(document.getElementById('q').value);
   var f=ROWS.filter(function(r){
     if(!q) return true;
-    return (r.region||'').toLowerCase().indexOf(q)>=0 ||
-           (r.segment||'').toLowerCase().indexOf(q)>=0 ||
-           (r.switch_ip||'').indexOf(q)>=0 ||
+    return norm(r.region).indexOf(q)>=0 ||
+           norm(r.segment).indexOf(q)>=0 ||
+           norm(r.switch_ip).indexOf(q)>=0 ||
            String(r.vlan).indexOf(q)>=0;
   });
-  document.getElementById('cnt').textContent=' найдено: '+f.length;
+  var c=' всего: '+ROWS.length+', найдено: '+f.length;
+  if(!ROWS.length){ c+=' | ТАБЛИЦА ПУСТА — дёрните обновление с GitHub ещё раз'; }
+  document.getElementById('cnt').textContent=c;
   document.getElementById('tb').innerHTML=f.map(function(r){
     return '<tr><td>'+r.region+'</td><td>'+r.switch_ip+'</td><td>'+r.segment+'</td><td><b>'+r.vlan+'</b></td>'
       +'<td><button class="btn" style="background:#3498db;" onclick="navigator.clipboard.writeText(\\''+r.vlan+'\\');alert(\\'VLAN скопирован\\')">📋</button> '
@@ -103,47 +113,11 @@ function addRow(){
          pin:localStorage.getItem('swhpin')||prompt('PIN:')||''};
   fetch('/api/vlans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})
   .then(function(r){return r.json();}).then(function(res){ if(res.ok){ load(); } else { alert('Ошибка: '+(res.error||'')); } });
-}
-load();
-</script>
-</body></html>"""
-
-@app.route('/vlans')
-def vlans_page():
-    return render_template_string(VLANS_HTML)
-
-@app.route('/api/vlans', methods=['GET', 'POST'])
-def vlans_api():
-    conn = get_db()
-    if request.method == 'GET':
-        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()
-        conn.close()
-        return jsonify([dict(r) for r in rows])
-    d = request.json or {}
-    if d.get('pin') != ADMIN_PIN:
-        conn.close()
-        return jsonify({'error': 'pin'}), 403
-    try:
-        conn.execute('INSERT OR REPLACE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
-                     (d.get('region', ''), d.get('switch_ip', ''), d.get('segment', ''), int(d.get('vlan') or 0)))
-        conn.commit()
-    except Exception as e:
-        conn.close()
-        return jsonify({'error': str(e)[:200]}), 400
-    conn.close()
-    return jsonify({'ok': True})
-
-
-'''
-    idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + VL + src[idx:]
-    print('ok: страница /vlans и API')
-
-VL_LINK = '<a href="/vlans" class="nav-link">🗂 VLANы</a>'
-if VL_LINK not in src:
-    rep('<a href="/gen" class="nav-link">🧬 Команды</a>',
-        '<a href="/gen" class="nav-link">🧬 Команды</a>\n            ' + VL_LINK,
-        'ссылка VLANы в меню')
+}'''
+    src = src[:i] + NEWJS + src[j:]
+    print('ok: всеядный поиск + счётчики')
+else:
+    print('ПРОПУСК: якорь JS vlans')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
