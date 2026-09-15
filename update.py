@@ -1,5 +1,11 @@
 import ast, json
 src = open('swh.py').read()
+def rep(old, new, label):
+    global src
+    if old in src:
+        src = src.replace(old, new, 1); print('  ok:', label)
+    else:
+        print('  ПРОПУСК:', label)
 
 D=[
 ('Тура','10.163.201.40',[(2101,'красный'),(2102,'оранжевый'),(2103,'желтый'),(2104,'зеленый'),(2105,'голубой'),(2106,'синий'),(2107,'фиолетовый'),(2109,'Зона 09'),(2110,'Морозово'),(2111,'Зона 11'),(2112,'Зона 12'),(2113,'Зона 13'),(2115,'Север'),(2116,'Резерв'),(2117,'ЖК Клевер к1'),(2118,'ЖК Клевер к2'),(2119,'ЖК Клевер к3'),(2120,'ЖК Клевер к4')]),
@@ -25,26 +31,77 @@ D=[
 ('Сегмент 16 Воронцово','10.163.16.2',[(2160,'Сегмент 16-01 PON'),(2161,'Сегмент 16-02'),(2162,'Сегмент 16-03'),(2163,'Сегмент 16-04'),(2164,'Сегмент 16-05'),(2165,'Сегмент 16-06'),(2166,'Сегмент 16-07'),(2167,'Сегмент 16-08'),(2168,'Сегмент 16-09'),(2169,'Сегмент 16-10')]),
 ('Сегмент 17 Афанасовский','10.163.17.1',[(2170,'Сегмент 17-01 МКД'),(2171,'Сегмент 17-02 PON'),(2172,'Сегмент 17-03'),(2173,'Сегмент 17-04'),(2174,'Сегмент 17-05'),(2175,'Сегмент 17-06'),(2176,'Сегмент 17-07'),(2177,'Сегмент 17-08'),(2178,'Сегмент 17-09'),(2179,'Сегмент 17-10')]),
 ]
+FLAT = [[r, ip, seg, v] for r, ip, rows in D for v, seg in rows]
 
-FLAT = [[region, ip, seg, vlan] for region, ip, rows in D for vlan, seg in rows]
-LITERAL = 'var VLAN_DATA=' + json.dumps(FLAT, ensure_ascii=False) + ';'
+# 1) Статический файл с данными (канал №2)
+import os
+os.makedirs('static', exist_ok=True)
+open('static/vlans.js', 'w').write('var VLAN_DATA=' + json.dumps(FLAT, ensure_ascii=False) + ';')
+print('ok: static/vlans.js (' + str(len(FLAT)) + ' строк)')
 
-NEWJS = LITERAL + r'''
-var ROWS=[];
+# 2) Сид в сервере + дозаполнение БД (канал №3), если раньше не встал
+if 'SEED_VLANS' not in src:
+    seed = 'SEED_VLANS = ' + repr(D) + '''
+
+def ensure_vlans(conn):
+    n = conn.execute('SELECT COUNT(*) c FROM region_vlans').fetchone()['c']
+    if n == 0:
+        for region, ip, rows in SEED_VLANS:
+            for vlan, seg in rows:
+                conn.execute('INSERT OR IGNORE INTO region_vlans (region, switch_ip, segment, vlan) VALUES (?,?,?,?)',
+                             (region, ip, seg, vlan))
+        conn.commit()
+
+'''
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + seed + src[idx:]
+    print('ok: SEED_VLANS')
+if 'ensure_vlans(conn)' not in src:
+    rep("""    if request.method == 'GET':
+        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()""",
+"""    if request.method == 'GET':
+        ensure_vlans(conn)
+        rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()""",
+        'api vlans: ensure')
+
+# 3) Консолидированный JS страницы: 3 канала + аварийная кнопка
+NEWJS = r'''var ROWS=[];
 function norm(s){ return (s||'').toLowerCase().replace(/[^0-9a-zа-яё./-]/g,''); }
-function baseRows(){ return VLAN_DATA.map(function(r){ return {region:r[0], switch_ip:r[1], segment:r[2], vlan:r[3]}; }); }
-function load(){
-  var qp=new URLSearchParams(location.search).get('q')||'';
-  if(qp){ document.getElementById('q').value=qp; }
-  ROWS=baseRows();
-  render();
+function baseRows(){
+  var d=window.VLAN_DATA||[];
+  return d.map(function(r){ return {region:r[0], switch_ip:r[1], segment:r[2], vlan:r[3]}; });
+}
+function mergeApi(cb){
   fetch('/api/vlans').then(function(r){return r.json();}).then(function(rows){
     (rows||[]).forEach(function(x){
       var ex=ROWS.some(function(r){ return r.region===x.region && String(r.vlan)===String(x.vlan); });
       if(!ex){ ROWS.push(x); }
     });
+    if(cb){ cb(); }
     render();
-  }).catch(function(){});
+  }).catch(function(){ if(cb){ cb(); } render(); });
+}
+function loadStatic(cb){
+  var s=document.createElement('script');
+  s.src='/static/vlans.js?ts='+Date.now();
+  s.onload=function(){ cb(); };
+  s.onerror=function(){ cb(); };
+  document.head.appendChild(s);
+}
+function load(){
+  var qp=new URLSearchParams(location.search).get('q')||'';
+  if(qp){ document.getElementById('q').value=qp; }
+  ROWS=baseRows();
+  render();
+  mergeApi(function(){
+    if(ROWS.length===0){
+      loadStatic(function(){ ROWS=baseRows(); mergeApi(null); });
+    }
+  });
+}
+function reloadVlans(){
+  document.getElementById('cnt').textContent=' загружаю...';
+  loadStatic(function(){ ROWS=baseRows(); mergeApi(null); });
 }
 function render(){
   var q=norm(document.getElementById('q').value);
@@ -56,6 +113,8 @@ function render(){
            String(r.vlan).indexOf(q)>=0;
   });
   document.getElementById('cnt').textContent=' всего: '+ROWS.length+', найдено: '+f.length;
+  var w=document.getElementById('vwarn');
+  if(w){ w.style.display=ROWS.length? 'none':'block'; }
   document.getElementById('tb').innerHTML=f.map(function(r){
     return '<tr><td>'+r.region+'</td><td>'+r.switch_ip+'</td><td>'+r.segment+'</td><td><b>'+r.vlan+'</b></td>'
       +'<td><button class="btn" style="background:#3498db;" onclick="navigator.clipboard.writeText(\''+r.vlan+'\');alert(\'VLAN скопирован\')">📋</button> '
@@ -75,14 +134,54 @@ function addRow(){
   .then(function(r){return r.json();}).then(function(res){ if(res.ok){ load(); } else { alert('Ошибка: '+(res.error||'')); } });
 }
 load();'''
-
-i = src.find('var ROWS=[];')
+i = src.find('var VLAN_DATA=')
+if i < 0:
+    i = src.find('var ROWS=[];')
 j = src.find('\nload();', i) if i >= 0 else -1
 if i >= 0 and j > i:
     src = src[:i] + NEWJS + src[j+len('\nload();'):]
-    print('ok: таблица VLAN вшита в страницу (' + str(len(FLAT)) + ' строк)')
+    print('ok: JS страницы консолидирован')
 else:
-    print('ПРОПУСК: якорь JS страницы vlans')
+    print('ПРОПУСК: якорь JS vlans')
+
+# 4) Красная плашка с аварийной кнопкой
+if 'id="vwarn"' not in src:
+    rep('<div class="card"><table>',
+"""<div id="vwarn" class="card" style="display:none;background:#ffebee;border:1px solid #e57373;">
+⚠️ Данные не загрузились. <button class="btn" style="background:#e57373;" onclick="reloadVlans()">🔄 Загрузить данные</button>
+<small>(или Ctrl+F5; если не помогло — «Тянуть обновление с GitHub»)</small></div>
+<div class="card"><table>""", 'плашка vwarn')
+
+# 5) Диагностика: счётчик VLANов
+if 'def _vlans_count' not in src:
+    helper = '''
+def _vlans_count():
+    try:
+        conn = get_db()
+        n = conn.execute('SELECT COUNT(*) c FROM region_vlans').fetchone()['c']
+        conn.close()
+        return n
+    except Exception:
+        return -1
+
+'''
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + helper + src[idx:]
+    print('ok: _vlans_count')
+if "'vlans_count'" not in src:
+    rep("'routes_missing': [e for e in ('/', '/map', '/commands', '/admin', '/stock',",
+        "'vlans_count': _vlans_count(),\n            'routes_missing': [e for e in ('/', '/map', '/commands', '/admin', '/stock',",
+        'диагностика: vlans_count')
+
+# 6) Показ счётчика в админке
+ajs_path = os.path.join('static', 'admin.js')
+ajs = open(ajs_path).read() if os.path.exists(ajs_path) else ''
+if 'VLANов в БД' not in ajs:
+    ajs = ajs.replace("    L.push('UI:');",
+"""    L.push('VLANов в БД: '+(res.vlans_count!==undefined? res.vlans_count : '?'));
+    L.push('UI:');""", 1)
+    open(ajs_path, 'w').write(ajs)
+    print('ok: admin.js показывает vlans_count')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
