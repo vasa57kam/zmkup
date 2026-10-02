@@ -1,115 +1,88 @@
-import ast, os, re
+import ast
 src = open('swh.py').read()
-def rep(old, new, label, all_=False):
+def rep(old, new, label):
     global src
     if old in src:
-        src = src.replace(old, new) if all_ else src.replace(old, new, 1)
-        print('  ok:', label)
+        src = src.replace(old, new, 1); print('  ok:', label)
     else:
         print('  ПРОПУСК:', label)
 
-# 1) Маршрут /uploads/... гарантированно
-if "'/uploads/<path:filename>'" not in src:
-    ep = '''
-@app.route('/uploads/<path:filename>')
-def uploads_serve(filename):
-    return send_from_directory(UPLOAD_DIR, filename)
+# 1) Скрипт полного удаления + эндпоинт
+if 'UNINSTALL_SH' not in src:
+    UN = '''UNINSTALL_SH = """#!/bin/bash
+DIR="${1:-$(cd "$(dirname "$0")" && pwd)}"
+echo "=== Полное удаление панели в $DIR ==="
+pkill -f "python3 $DIR/swh.py" 2>/dev/null
+pkill -f "python3 swh.py" 2>/dev/null
+sleep 2
+( crontab -l 2>/dev/null | grep -v 'swh.py' ) | crontab - 2>/dev/null
+if [ "$FULL" == "1" ]; then
+  echo '=== Сносим поставленные пакеты ==='
+  apt-get remove -y snmp sshpass traceroute 2>/dev/null
+  pip3 uninstall -y flask flask-cors 2>/dev/null
+fi
+cd /tmp
+rm -rf "$DIR"
+rm -f /tmp/swh_uninstall.sh
+echo '=== Панель удалена полностью. Сервер как до установки. ==='
+"""
+
+@app.route('/api/admin/uninstall', methods=['POST'])
+def admin_uninstall():
+    import subprocess
+    import threading
+    d = request.json or {}
+    if d.get('pin') != ADMIN_PIN or d.get('confirm') != 'УДАЛИТЬ':
+        return jsonify({'error': 'нужен PIN и слово подтверждения УДАЛИТЬ'}), 403
+    base = os.path.dirname(os.path.abspath(__file__))
+    sh = '/tmp/swh_uninstall.sh'
+    open(sh, 'w').write(UNINSTALL_SH)
+    os.chmod(sh, 0o755)
+    env = dict(os.environ)
+    env['FULL'] = '1' if d.get('full') else '0'
+    subprocess.Popen(['bash', sh, base], env=env, start_new_session=True)
+    threading.Timer(3.0, lambda: os._exit(0)).start()
+    return jsonify({'ok': True, 'out': 'Удаление запущено: процесс остановлен, cron снят, файлы стираются.'})
 
 
 '''
     idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + ep + src[idx:]
-    print('ok: маршрут /uploads')
+    src = src[:idx] + UN + src[idx:]
+    print('ok: uninstall.sh + эндпоинт')
 
-# 2) Отдача по ID гарантированно
-if "'/api/attachments/file/" not in src:
-    ep = '''
-@app.route('/api/attachments/file/<int:att_id>')
-def attachment_file(att_id):
-    conn = get_db()
-    r = conn.execute('SELECT filename FROM attachments WHERE id=?', (att_id,)).fetchone()
-    conn.close()
-    if not r:
-        return 'Файл не найден', 404
-    return send_from_directory(UPLOAD_DIR, r['filename'])
+# 2) uninstall.sh внутрь миграционного архива
+rep("""        t.add(dep, arcname='swh_migrate/deploy.sh')
+    os.remove(dep)""",
+"""        t.add(dep, arcname='swh_migrate/deploy.sh')
+        dep2 = os.path.join(base, 'uninstall_tmp.sh')
+        open(dep2, 'w').write(UNINSTALL_SH)
+        t.add(dep2, arcname='swh_migrate/uninstall.sh')
+        os.remove(dep2)
+    os.remove(dep)""", 'uninstall.sh в архиве')
 
+# 3) Кнопка в админке
+rep('<button class="btn btn-primary" onclick="migrate()">🚚 Миграция: собрать архив</button>',
+    '<button class="btn btn-primary" onclick="migrate()">🚚 Миграция: собрать архив</button>\n<button class="btn" style="background:#c0392b;" onclick="uninstallPanel()">☠️ Полное удаление</button>',
+    'кнопка полного удаления')
 
-'''
-    idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + ep + src[idx:]
-    print('ok: отдача по ID')
-
-# 3) Жёсткая проверка записи при загрузке
-m = re.search(r"([ \t]*)(\w+)\.save\(os\.path\.join\(UPLOAD_DIR, *(\w+)\)\)", src)
-if m:
-    ind, obj, var = m.groups()
-    new = (ind + "os.makedirs(UPLOAD_DIR, exist_ok=True)\n"
-           + ind + obj + ".save(os.path.join(UPLOAD_DIR, " + var + "))\n"
-           + ind + "if not os.path.exists(os.path.join(UPLOAD_DIR, " + var + ")):\n"
-           + ind + "    return jsonify({'error': 'файл не записался на диск (место/права?)'}), 500\n")
-    src = src[:m.start()] + new + src[m.end():]
-    print('ok: проверка записи файла')
-else:
-    print('ПРОПУСК: строка save() не найдена')
-
-# 4) Диагностика файлов-призраков
-if 'def _missing_files' not in src:
-    helper = '''
-def _missing_files():
-    try:
-        conn = get_db()
-        rows = conn.execute('SELECT id, filename FROM attachments').fetchall()
-        conn.close()
-        return [r['id'] for r in rows if not os.path.exists(os.path.join(UPLOAD_DIR, r['filename']))]
-    except Exception:
-        return [-1]
-
-@app.route('/api/admin/files_check')
-def files_check():
-    if request.args.get('pin') != ADMIN_PIN:
-        return jsonify({'error': 'pin'}), 403
-    conn = get_db()
-    rows = conn.execute('SELECT id, filename, original_name FROM attachments').fetchall()
-    conn.close()
-    missing = [{'id': r['id'], 'filename': r['filename'], 'original': r['original_name']}
-               for r in rows if not os.path.exists(os.path.join(UPLOAD_DIR, r['filename']))]
-    return jsonify({'missing': missing, 'uploads_dir': UPLOAD_DIR,
-                    'dir_exists': os.path.isdir(UPLOAD_DIR),
-                    'sample': (sorted(os.listdir(UPLOAD_DIR))[:20] if os.path.isdir(UPLOAD_DIR) else [])})
-
-'''
-    idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + helper + src[idx:]
-    print('ok: _missing_files + /api/admin/files_check')
-
-if "'files_missing'" not in src:
-    rep("'vlans_count': _vlans_count(),",
-        "'vlans_count': _vlans_count(),\n            'files_missing': _missing_files(),",
-        'диагностика: files_missing')
-
-# 5) Все ссылки на картинки — по ID (во всех файлах)
-rep("'/uploads/'+a.filename+'", "'/api/attachments/file/'+a.id+'", 'swh: ссылки по ID', all_=True)
-rep("'/uploads/'+x.filename+'", "'/api/attachments/file/'+x.id+'", 'swh: ссылки по ID (x)', all_=True)
-for fn in ('static/common.js', 'static/kb.js'):
-    if os.path.exists(fn):
-        t = open(fn).read()
-        o = t
-        t = t.replace("'/uploads/'+a.filename+'", "'/api/attachments/file/'+a.id+'")
-        t = t.replace("'/uploads/'+x.filename+'", "'/api/attachments/file/'+x.id+'")
-        if t != o:
-            open(fn, 'w').write(t)
-            print('ok:', fn, '-> по ID')
-
-# 6) Показ файлов-призраков в админке
+# 4) JS кнопки
+import os
 ajs_path = os.path.join('static', 'admin.js')
-if os.path.exists(ajs_path):
-    ajs = open(ajs_path).read()
-    if 'Файлов-призраков' not in ajs:
-        ajs = ajs.replace("    L.push('VLANов в БД: '",
-"""    L.push('Файлов-призраков (нет на диске): '+((res.files_missing||[]).length? ('ID '+(res.files_missing||[]).join(', ')+' — удалите эти вложения и залейте заново') : '0'));
-    L.push('VLANов в БД: '""", 1)
-        open(ajs_path, 'w').write(ajs)
-        print('ok: admin.js показывает призраков')
+ajs = open(ajs_path).read() if os.path.exists(ajs_path) else ''
+if 'function uninstallPanel()' not in ajs:
+    ajs += '''
+function uninstallPanel(){
+  if(!confirm('ПОЛНОЕ удаление панели с ЭТОГО сервера? Наряды, фото, база, бэкапы будут СТЁРТЫ!')) return;
+  var w=prompt('Введите слово УДАЛИТЬ для подтверждения:');
+  if(w!=='УДАЛИТЬ'){ alert('Отменено'); return; }
+  fetch('/api/admin/uninstall',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pin:getPin(), confirm:'УДАЛИТЬ', full:false})})
+  .then(function(){ alert('Удаление запущено. Сервер скоро перестанет отвечать — это нормально.'); })
+  .catch(function(){ alert('Сервер уже гаснет — удаление идёт.'); });
+}
+'''
+    open(ajs_path, 'w').write(ajs)
+    print('ok: admin.js uninstallPanel')
 
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
