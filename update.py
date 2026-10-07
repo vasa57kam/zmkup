@@ -1,50 +1,38 @@
 import ast, sqlite3
 src = open('swh.py').read()
 
-# 1) Статья в базу знаний (создаётся один раз)
+# 1) Дополняем статью БЗ: лимит одного source + безопасная смена source-порта
 conn = sqlite3.connect('switch_replacements.db')
-conn.execute('''CREATE TABLE IF NOT EXISTS kb_articles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT, category TEXT, tags TEXT, body TEXT, schema TEXT, created_at TEXT)''')
-row = conn.execute("SELECT id FROM kb_articles WHERE title LIKE '%магистраль%абонент%ISM%' OR title LIKE '%ISM/IGMP%'").fetchone()
-if not row:
-    from datetime import datetime
-    BODY = '''ПОРЯДОК ПЕРЕВОДА МАГИСТРАЛЬНОГО ПОРТА В АБОНЕНТСКИЙ НА DES-3200 (и любых свитчах с ISM/IGMP snooping multicast_vlan, IPTV vlan 1151):
+ADD = '''
 
-0) Посмотреть текущую конфигурацию ISM:
-   show igmp_snooping multicast_vlan vlan1151
-   Роли портов: source_port — куда заходит поток (напр. 27); tag_member_port — магистрали (напр. 25); member_port — абонентские (1-24,26,28).
+=== ДОПОЛНЕНИЕ (2026-10): SOURCE-ПОРТ ISM ===
+ВАЖНО: в одной ISM VLAN на DES-3200 может быть ТОЛЬКО ОДИН source_port (аппаратное ограничение).
+Два источника нельзя: 1) петля мультикаст-трафика (положит CPU и полосу); 2) дублирование IPTV-каналов (рассыпается картинка).
+Резервирование аплинков: LACP (объединить порты в trunk-группу и указать её как source_port) либо RSTP/ERPS (резервный порт блокируется протоколом, при падении основного открывается).
 
-1) ЕСЛИ переводимый порт является source_port — СНАЧАЛА назначить source_port новому порту, и только потом убирать старый. Иначе ошибка:
-   "wrong ISM config (see limits also) Source is absent should be 27. The configuration was corrected automatically"
-   (свитч сам перекроил конфиг, multicast мог отвалиться).
-
-2) Убрать порт из tag_member_port:
-   config igmp_snooping multicast_vlan vlan1151 delete tag_member_port 25
-3) Добавить порт в member_port (теперь он абонентский):
-   config igmp_snooping multicast_vlan vlan1151 add member_port 25
-4) ТОЛЬКО ТЕПЕРЬ менять VLAN-ы: убрать порт из магистрального VLAN (config vlan vlanid N delete 25), добавить untagged в абонентский + pvid.
-5) save. Проверить: show igmp_snooping multicast_vlan vlan1151, IPTV у абонентов, show log.
-
-ПРИМЕР ЛОГА (2026-10-07, свитч 10.163.201.116 DES-3200-28):
-config igmp_snooping multicast_vlan vlan1151 delete member_port 1-24,26,28
-config igmp_snooping multicast_vlan vlan1151 delete tag_member_port 25,27
-config igmp_snooping multicast_vlan vlan1151 add source_port 27
-config igmp_snooping multicast_vlan vlan1151 add member_port 1-24,26,28
-config igmp_snooping multicast_vlan vlan1151 add tag_member_port 25
-
-ВЫВОД: сначала разбираемся с ролями ISM (source/tag_member/member), потом трогаем VLAN-ы. Нарушение порядка = автоисправление конфига свитчом + риск потери multicast + злой глав инженер.'''
-    conn.execute('INSERT INTO kb_articles (title, category, tags, body, schema, created_at) VALUES (?,?,?,?,?,?)',
-                 ('DES-3200: перевод магистрального порта в абонентский без ошибок ISM/IGMP (vlan1151)',
-                  'Свитчи', 'IGMP, ISM, multicast_vlan, vlan1151, DES-3200, IPTV, tag_member_port, source_port',
-                  BODY, '', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+БЕЗОПАСНЫЙ ПОРЯДОК СМЕНЫ SOURCE-ПОРТА (старый S -> новый N):
+1) config igmp_snooping multicast_vlan vlan<MV> delete member_port N      (если N был в клиентах)
+2) config igmp_snooping multicast_vlan vlan<MV> delete tag_member_port N  (если N был тегированным)
+3) config igmp_snooping multicast_vlan vlan<MV> delete source_port S
+4) config igmp_snooping multicast_vlan vlan<MV> add source_port N
+5) ФИЗИЧЕСКИ переставить патч-корд из S в N
+6) config igmp_snooping multicast_vlan vlan<MV> add member_port S         (освободившийся старый порт — в клиенты)
+7) show igmp_snooping multicast_vlan                                       (проверить роли)
+8) show igmp_snooping group vlan vlan<MV>                                  (проверить группы/роутер-порт)
+9) save
+Примечание по синтаксису: на наших прошивках (лог 10.163.201.116) команда звучит как
+"config igmp_snooping multicast_vlan vlan1151 ..."; в части гайдов/прошивок встречается
+"config multicast_vlan vlan<N> ..." — суть та же, при ругани свитча менять префикс.'''
+r = conn.execute("SELECT id FROM kb_articles WHERE title LIKE '%ISM/IGMP%' OR title LIKE '%магистраль%абонент%ISM%'").fetchone()
+if r:
+    conn.execute('UPDATE kb_articles SET body = body || ? WHERE id=?', (ADD, r[0]))
     conn.commit()
-    print('ok: статья БЗ создана')
+    print('ok: статья БЗ дополнена про source_port')
 else:
-    print('статья БЗ уже есть')
+    print('статья БЗ не найдена — создайте вручную или повторите прошлый update')
 conn.close()
 
-# 2) Операции ISM + комбо в генераторе (семейство DES)
+# 2) Генератор: операция безопасной смены source-порта
 p = 'static/gen.js'
 js = open(p).read()
 def rj(old, new, label):
@@ -54,29 +42,28 @@ def rj(old, new, label):
     else:
         print('  ПРОПУСК:', label)
 
-rj(" ddm_all:'show ddm'\n},\ndgs:{",
-   " ddm_all:'show ddm',\n ism_show:'show igmp_snooping multicast_vlan vlan{vlan}',\n ism_del_tag:'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}',\n ism_del_mem:'config igmp_snooping multicast_vlan vlan{vlan} delete member_port {ports}',\n ism_add_mem:'config igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}',\n ism_add_src:'config igmp_snooping multicast_vlan vlan{vlan} add source_port {ports}',\n t2a:'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}\\nconfig igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}\\nconfig vlan vlanid {trunk} delete {ports}\\nconfig vlan vlanid {text} add untagged {ports}\\nconfig ports {ports} pvid {text}'\n},\ndgs:{",
-   'TPL des: ISM + комбо t2a')
-
-rj("ddm_all:'DDM всех портов (SFP)'};",
-   "ddm_all:'DDM всех портов (SFP)',ism_show:'ISM: показать конфиг multicast_vlan (IPTV)',ism_del_tag:'ISM: убрать порт из tag_member (магистрали)',ism_del_mem:'ISM: убрать порт из member',ism_add_mem:'ISM: добавить порт в member (абонентский)',ism_add_src:'ISM: добавить source_port (куда заходит поток)',t2a:'КОМБО: магистраль→абонент без ошибок ISM'};",
-   'NAMES: ISM')
-
-rj("ddm_all:'Ничего вводить не надо.'};",
-   "ddm_all:'Ничего вводить не надо.',ism_show:'VLAN — номер multicast-VLAN (обычно 1151). Покажет source_port / tag_member_port / member_port.',ism_del_tag:'VLAN=1151; Порт(ы) — магистральный порт, который переводим в абонентский.',ism_del_mem:'VLAN=1151; Порт(ы) — порты, убираемые из member.',ism_add_mem:'VLAN=1151; Порт(ы) — порты, ставшие абонентскими.',ism_add_src:'VLAN=1151; Порт(ы) — порт, куда заходит IPTV-поток (напр. 27). БЕЗ source будет ошибка «Source is absent».',t2a:'VLAN=1151 (multicast); Порт(ы) — переводимый порт; Порт(ы) магистрали — его СТАРЫЙ магистральный VLAN; Текст — НОВЫЙ абонентский VLAN. Даёт 5 команд правильным порядком.'};",
-   'HINTS: ISM')
-
-rj("ddm:'1) Tx/Rx мощность\\n2) Rx ниже -25 dBm — деградация оптики\\n3) почистить/заменить, снова сравнить'};",
-   "ddm:'1) Tx/Rx мощность\\n2) Rx ниже -25 dBm — деградация оптики\\n3) почистить/заменить, снова сравнить',t2a:'1) show igmp_snooping multicast_vlan vlan1151 — посмотреть роли\\n2) если порт был source_port — СНАЧАЛА add source_port новому порту\\n3) delete tag_member_port, add member_port\\n4) убрать порт из магистрального VLAN\\n5) add untagged в абонентский + pvid\\n6) save\\n7) проверить IPTV у абонентов и show log (ошибка wrong ISM config = нет source)'};",
-   'MEMO: t2a')
-
-open(p, 'w').write(js)
-print('ok: gen.js + ISM')
+if 'ism_swap' not in js:
+    rj(" t2a:'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}",
+       " ism_swap:'config igmp_snooping multicast_vlan vlan{vlan} delete member_port {trunk}\\nconfig igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {trunk}\\nconfig igmp_snooping multicast_vlan vlan{vlan} delete source_port {ports}\\nconfig igmp_snooping multicast_vlan vlan{vlan} add source_port {trunk}\\nconfig igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}\\nshow igmp_snooping multicast_vlan\\nsave',\n t2a:'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}",
+       'TPL: ism_swap')
+    rj("t2a:'КОМБО: магистраль→абонент без ошибок ISM'};",
+       "t2a:'КОМБО: магистраль→абонент без ошибок ISM',ism_swap:'КОМБО: смена source-порта ISM (безопасный порядок)'};",
+       'NAMES: ism_swap')
+    rj("t2a:'VLAN — мультикаст-VLAN свитча (1151 или ваш); Порт(ы) — переводимый порт; Порт(ы) магистрали — его СТАРЫЙ магистральный VLAN; Текст — НОВЫЙ абонентский VLAN. 5 команд правильным порядком.'};",
+       "t2a:'VLAN — мультикаст-VLAN свитча (1151 или ваш); Порт(ы) — переводимый порт; Порт(ы) магистрали — его СТАРЫЙ магистральный VLAN; Текст — НОВЫЙ абонентский VLAN. 5 команд правильным порядком.',ism_swap:'VLAN — мультикаст-VLAN; Порт(ы) — СТАРЫЙ source-порт (удаляемый); Порт(ы) магистрали — НОВЫЙ source-порт (добавляемый). Помни: source в ISM VLAN всегда ОДИН! Патч-корд переставить физически после назначения нового source.'};",
+       'HINTS: ism_swap')
+    rj("7) проверить IPTV и show log'};",
+       "7) проверить IPTV и show log',ism_swap:'1) вычистить новый порт из member/tag_member\\n2) delete source_port старого\\n3) add source_port нового\\n4) ФИЗИЧЕСКИ переставить патч-корд\\n5) старый порт add member_port\\n6) show igmp_snooping multicast_vlan + group vlan\\n7) save\\n8) два source нельзя: петля мультикаста и дубли каналов; резерв — только LACP/RSTP/ERPS'};",
+       'MEMO: ism_swap')
+    open(p, 'w').write(js)
+    print('ok: gen.js + ism_swap')
+else:
+    print('ism_swap уже есть')
 
 src = open('swh.py').read()
-if '/static/gen.js?v=10' not in src:
-    src = src.replace('/static/gen.js?v=9', '/static/gen.js?v=10', 1)
-    print('ok: версия gen.js -> v10')
+if '/static/gen.js?v=12' not in src:
+    src = src.replace('/static/gen.js?v=11', '/static/gen.js?v=12', 1)
+    print('ok: версия gen.js -> v12')
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
 print('update.py отработал, синтаксис ОК')
