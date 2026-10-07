@@ -1,114 +1,82 @@
-import ast
+import ast, sqlite3
 src = open('swh.py').read()
-def rep(old, new, label):
-    global src
-    if old in src:
-        src = src.replace(old, new, 1); print('  ok:', label)
+
+# 1) Статья в базу знаний (создаётся один раз)
+conn = sqlite3.connect('switch_replacements.db')
+conn.execute('''CREATE TABLE IF NOT EXISTS kb_articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT, category TEXT, tags TEXT, body TEXT, schema TEXT, created_at TEXT)''')
+row = conn.execute("SELECT id FROM kb_articles WHERE title LIKE '%магистраль%абонент%ISM%' OR title LIKE '%ISM/IGMP%'").fetchone()
+if not row:
+    from datetime import datetime
+    BODY = '''ПОРЯДОК ПЕРЕВОДА МАГИСТРАЛЬНОГО ПОРТА В АБОНЕНТСКИЙ НА DES-3200 (и любых свитчах с ISM/IGMP snooping multicast_vlan, IPTV vlan 1151):
+
+0) Посмотреть текущую конфигурацию ISM:
+   show igmp_snooping multicast_vlan vlan1151
+   Роли портов: source_port — куда заходит поток (напр. 27); tag_member_port — магистрали (напр. 25); member_port — абонентские (1-24,26,28).
+
+1) ЕСЛИ переводимый порт является source_port — СНАЧАЛА назначить source_port новому порту, и только потом убирать старый. Иначе ошибка:
+   "wrong ISM config (see limits also) Source is absent should be 27. The configuration was corrected automatically"
+   (свитч сам перекроил конфиг, multicast мог отвалиться).
+
+2) Убрать порт из tag_member_port:
+   config igmp_snooping multicast_vlan vlan1151 delete tag_member_port 25
+3) Добавить порт в member_port (теперь он абонентский):
+   config igmp_snooping multicast_vlan vlan1151 add member_port 25
+4) ТОЛЬКО ТЕПЕРЬ менять VLAN-ы: убрать порт из магистрального VLAN (config vlan vlanid N delete 25), добавить untagged в абонентский + pvid.
+5) save. Проверить: show igmp_snooping multicast_vlan vlan1151, IPTV у абонентов, show log.
+
+ПРИМЕР ЛОГА (2026-10-07, свитч 10.163.201.116 DES-3200-28):
+config igmp_snooping multicast_vlan vlan1151 delete member_port 1-24,26,28
+config igmp_snooping multicast_vlan vlan1151 delete tag_member_port 25,27
+config igmp_snooping multicast_vlan vlan1151 add source_port 27
+config igmp_snooping multicast_vlan vlan1151 add member_port 1-24,26,28
+config igmp_snooping multicast_vlan vlan1151 add tag_member_port 25
+
+ВЫВОД: сначала разбираемся с ролями ISM (source/tag_member/member), потом трогаем VLAN-ы. Нарушение порядка = автоисправление конфига свитчом + риск потери multicast + злой глав инженер.'''
+    conn.execute('INSERT INTO kb_articles (title, category, tags, body, schema, created_at) VALUES (?,?,?,?,?,?)',
+                 ('DES-3200: перевод магистрального порта в абонентский без ошибок ISM/IGMP (vlan1151)',
+                  'Свитчи', 'IGMP, ISM, multicast_vlan, vlan1151, DES-3200, IPTV, tag_member_port, source_port',
+                  BODY, '', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    conn.commit()
+    print('ok: статья БЗ создана')
+else:
+    print('статья БЗ уже есть')
+conn.close()
+
+# 2) Операции ISM + комбо в генераторе (семейство DES)
+p = 'static/gen.js'
+js = open(p).read()
+def rj(old, new, label):
+    global js
+    if old in js:
+        js = js.replace(old, new, 1); print('  ok:', label)
     else:
         print('  ПРОПУСК:', label)
 
-# 1) Эндпоинты автозапуска (cron keepalive + @reboot)
-if "'/api/admin/autostart'" not in src:
-    ep = '''
-@app.route('/api/admin/autostart', methods=['GET', 'POST'])
-def admin_autostart():
-    import subprocess
-    base = os.path.dirname(os.path.abspath(__file__))
-    if request.method == 'GET':
-        if request.args.get('pin') != ADMIN_PIN:
-            return jsonify({'error': 'pin'}), 403
-        cur = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
-        return jsonify({'enabled': 'swh.py' in (cur.stdout or '')})
-    d = request.json or {}
-    if d.get('pin') != ADMIN_PIN:
-        return jsonify({'error': 'pin'}), 403
-    enable = bool(d.get('enable'))
-    cur = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
-    lines = [l for l in (cur.stdout or '').splitlines() if l.strip() and 'swh.py' not in l]
-    if enable:
-        lines.append('* * * * * cd ' + base + ' && (curl -s -o /dev/null --max-time 3 http://localhost:9500/ || nohup python3 swh.py >> swh.log 2>&1 &)')
-        lines.append('@reboot sleep 5 && cd ' + base + ' && nohup python3 swh.py >> swh.log 2>&1 &')
-    p = subprocess.run(['crontab', '-'], input='\\n'.join(lines) + '\\n', capture_output=True, text=True)
-    if p.returncode != 0:
-        return jsonify({'error': 'crontab: ' + (p.stderr or '')[:200]}), 500
-    return jsonify({'ok': True, 'enabled': enable})
+rj(" ddm_all:'show ddm'\n},\ndgs:{",
+   " ddm_all:'show ddm',\n ism_show:'show igmp_snooping multicast_vlan vlan{vlan}',\n ism_del_tag:'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}',\n ism_del_mem:'config igmp_snooping multicast_vlan vlan{vlan} delete member_port {ports}',\n ism_add_mem:'config igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}',\n ism_add_src:'config igmp_snooping multicast_vlan vlan{vlan} add source_port {ports}',\n t2a:'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}\\nconfig igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}\\nconfig vlan vlanid {trunk} delete {ports}\\nconfig vlan vlanid {text} add untagged {ports}\\nconfig ports {ports} pvid {text}'\n},\ndgs:{",
+   'TPL des: ISM + комбо t2a')
 
+rj("ddm_all:'DDM всех портов (SFP)'};",
+   "ddm_all:'DDM всех портов (SFP)',ism_show:'ISM: показать конфиг multicast_vlan (IPTV)',ism_del_tag:'ISM: убрать порт из tag_member (магистрали)',ism_del_mem:'ISM: убрать порт из member',ism_add_mem:'ISM: добавить порт в member (абонентский)',ism_add_src:'ISM: добавить source_port (куда заходит поток)',t2a:'КОМБО: магистраль→абонент без ошибок ISM'};",
+   'NAMES: ISM')
 
-'''
-    idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + ep + src[idx:]
-    print('ok: /api/admin/autostart')
+rj("ddm_all:'Ничего вводить не надо.'};",
+   "ddm_all:'Ничего вводить не надо.',ism_show:'VLAN — номер multicast-VLAN (обычно 1151). Покажет source_port / tag_member_port / member_port.',ism_del_tag:'VLAN=1151; Порт(ы) — магистральный порт, который переводим в абонентский.',ism_del_mem:'VLAN=1151; Порт(ы) — порты, убираемые из member.',ism_add_mem:'VLAN=1151; Порт(ы) — порты, ставшие абонентскими.',ism_add_src:'VLAN=1151; Порт(ы) — порт, куда заходит IPTV-поток (напр. 27). БЕЗ source будет ошибка «Source is absent».',t2a:'VLAN=1151 (multicast); Порт(ы) — переводимый порт; Порт(ы) магистрали — его СТАРЫЙ магистральный VLAN; Текст — НОВЫЙ абонентский VLAN. Даёт 5 команд правильным порядком.'};",
+   'HINTS: ISM')
 
-# 2) README.txt в миграционный архив
-if 'readme_tmp.txt' not in src:
-    rep("        t.add(dep, arcname='swh_migrate/deploy.sh')",
-"""        rd = os.path.join(base, 'readme_tmp.txt')
-        open(rd, 'w').write(README_TXT)
-        t.add(rd, arcname='swh_migrate/README.txt')
-        os.remove(rd)
-        t.add(dep, arcname='swh_migrate/deploy.sh')""", 'README в архиве')
+rj("ddm:'1) Tx/Rx мощность\\n2) Rx ниже -25 dBm — деградация оптики\\n3) почистить/заменить, снова сравнить'};",
+   "ddm:'1) Tx/Rx мощность\\n2) Rx ниже -25 dBm — деградация оптики\\n3) почистить/заменить, снова сравнить',t2a:'1) show igmp_snooping multicast_vlan vlan1151 — посмотреть роли\\n2) если порт был source_port — СНАЧАЛА add source_port новому порту\\n3) delete tag_member_port, add member_port\\n4) убрать порт из магистрального VLAN\\n5) add untagged в абонентский + pvid\\n6) save\\n7) проверить IPTV у абонентов и show log (ошибка wrong ISM config = нет source)'};",
+   'MEMO: t2a')
 
-if 'README_TXT = ' not in src:
-    RT = '''README_TXT = """УСТАНОВКА И УДАЛЕНИЕ ПАНЕЛИ ЗАМЕНЫ КОММУТАТОРОВ
-================================================
-1) Распаковать архив:  tar xzf swh_migrate_*.tar.gz
-2) Перейти в папку:   cd swh_migrate
-3) Установить и запустить:  bash deploy.sh
-   (поставит flask/snmp/sshpass/traceroute, поднимет панель на порту 9500,
-    пропишет автозапуск после перезагрузки и сторожа каждую минуту)
-4) Автозапуск вкл/выкл: админка -> блок «🔄 Автозапуск» (кнопки Включить/Выключить).
-5) Полное удаление со всеми следами:  bash uninstall.sh
-   вместе с системными пакетами:      FULL=1 bash uninstall.sh
-6) Все данные лежат в этой папке: база нарядов/камер/VLAN, фото (uploads),
-   бэкапы (backups). Архив храните как точку отката.
-7) Ollama-модели на новый сервер ставятся отдельно (без них панель работает,
-   кнопки ИИ скажут «ollama недоступна»).
-"""
+open(p, 'w').write(js)
+print('ok: gen.js + ISM')
 
-'''
-    idx = src.rfind("if __name__ == '__main__':")
-    src = src[:idx] + RT + src[idx:]
-    print('ok: README_TXT')
-
-# 3) Блок автозапуска в админке
-if 'id="asStatus"' not in src:
-    rep('<button class="btn" style="background:#c0392b;" onclick="uninstallPanel()">☠️ Полное удаление</button>',
-"""<button class="btn" style="background:#c0392b;" onclick="uninstallPanel()">☠️ Полное удаление</button>
-<div style="background:#fff;padding:1rem;border-radius:8px;margin:1rem 0;">
-<h3>🔄 Автозапуск после ребута и обновлений</h3>
-<p id="asStatus" style="color:#7f8c8d;">Статус: проверяю…</p>
-<button class="btn btn-success" onclick="autostartSet(true)">✅ Включить автозапуск</button>
-<button class="btn btn-secondary" onclick="autostartSet(false)">⛔ Выключить автозапуск</button>
-<small style="display:block;margin-top:.5rem;color:#7f8c8d;">Когда включено: cron поднимает панель сам после перезагрузки сервера и после любого обновления с перезапуском (проверка каждую минуту). Выключили — панель живёт только до ребута.</small>
-</div>""", 'блок автозапуска в админке')
-
-# 4) JS админки
-import os
-ajs_path = os.path.join('static', 'admin.js')
-ajs = open(ajs_path).read() if os.path.exists(ajs_path) else ''
-if 'function loadAutostart()' not in ajs:
-    ajs += '''
-function loadAutostart(){
-  var el=document.getElementById('asStatus');
-  if(!el) return;
-  fetch('/api/admin/autostart?pin='+encodeURIComponent(getPin())).then(function(r){return r.json();}).then(function(res){
-    el.textContent='Статус: '+(res.enabled? 'ВКЛЮЧЕН (cron-сторож каждую минуту + автозапуск после ребута)' : 'ВЫКЛЮЧЕН (панель не поднимется сама после ребута)');
-  }).catch(function(){ el.textContent='Статус: неизвестен'; });
-}
-function autostartSet(on){
-  fetch('/api/admin/autostart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:getPin(), enable:on})})
-  .then(function(r){return r.json();}).then(function(res){
-    alert(res.ok? (on? 'Автозапуск ВКЛЮЧЁН' : 'Автозапуск ВЫКЛЮЧЕН') : 'Ошибка: '+(res.error||''));
-    loadAutostart();
-  });
-}
-'''
-    ajs = ajs.replace("  if(document.getElementById('clList')){ loadCL(); }",
-"""  if(document.getElementById('clList')){ loadCL(); }
-  loadAutostart();""", 1)
-    open(ajs_path, 'w').write(ajs)
-    print('ok: admin.js автозапуск')
-
+src = open('swh.py').read()
+if '/static/gen.js?v=10' not in src:
+    src = src.replace('/static/gen.js?v=9', '/static/gen.js?v=10', 1)
+    print('ok: версия gen.js -> v10')
 open('swh.py', 'w').write(src)
 ast.parse(open('swh.py').read())
 print('update.py отработал, синтаксис ОК')
