@@ -1,140 +1,192 @@
-import json, os, re, shutil, ast
-JS_PATH = os.path.join('static', 'gen.js')
-os.makedirs('static', exist_ok=True)
-if os.path.exists(JS_PATH):
-    shutil.copyfile(JS_PATH, JS_PATH + '.bak')
-    print('ok: резервная копия gen.js.bak')
+import ast, json, os, re, shutil
+from datetime import datetime
+TS = datetime.now().strftime('%Y%m%d_%H%M%S')
+os.makedirs('backups', exist_ok=True)
+shutil.copyfile('swh.py', 'backups/swh_pre_v17_' + TS + '.py')
+src = open('swh.py', encoding='utf-8').read()
+FIXES = []
+def rep(old, new, label):
+    global src
+    if old in src:
+        src = src.replace(old, new, 1); FIXES.append(label); print('  ok:', label)
+    else:
+        print('  ПРОПУСК:', label)
 
-TPL = {
- 'des': {
-  'create': 'create vlan {text} tag {vlan}', 'del_vlan': 'delete vlan {vlan}',
-  'add_untag': 'config vlan vlanid {vlan} add untagged {ports}',
-  'add_tag': 'config vlan vlanid {vlan} add tagged {ports}',
-  'del_port': 'config vlan vlanid {vlan} delete {ports}',
-  'show_vlan': 'show vlan {vlan}', 'show_ports': 'show vlan ports {ports}',
-  'pvid': 'config ports {ports} pvid {vlan}', 'find_mac': 'show fdb {mac}', 'show_fdb': 'show fdb',
-  'port_info': 'show ports {ports}', 'port_util': 'show utilization ports {ports}',
-  'port_err': 'show counters ports {ports}', 'clear_cnt': 'clear counters ports {ports}',
-  'port_speed': 'config ports {ports} speed {speed}{duplex}',
-  'port_off': 'config ports {ports} state disabled', 'port_on': 'config ports {ports} state enabled',
-  'save': 'save', 'reboot': 'reboot',
-  'cam': 'create vlan {text} tag {vlan}\nconfig vlan vlanid {vlan} add tagged {trunk}\nconfig vlan vlanid {vlan} add untagged {ports}\nconfig ports {ports} pvid {vlan}\nsave',
-  'trunk': 'config vlan vlanid {vlan} add tagged {trunk}',
-  'ddm': 'show ddm ports {ports}', 'ddm_all': 'show ddm',
-  'ism_show': 'show igmp_snooping multicast_vlan vlan{vlan}',
-  'ism_del_tag': 'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}',
-  'ism_del_mem': 'config igmp_snooping multicast_vlan vlan{vlan} delete member_port {ports}',
-  'ism_add_mem': 'config igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}',
-  'ism_add_src': 'config igmp_snooping multicast_vlan vlan{vlan} add source_port {ports}',
-  'ism_swap': 'config igmp_snooping multicast_vlan vlan{vlan} delete member_port {trunk}\nconfig igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {trunk}\nconfig igmp_snooping multicast_vlan vlan{vlan} delete source_port {ports}\nconfig igmp_snooping multicast_vlan vlan{vlan} add source_port {trunk}\nconfig igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}\nshow igmp_snooping multicast_vlan\nsave',
-  't2a': 'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}\nconfig igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}\nconfig vlan vlanid {trunk} delete {ports}\nconfig vlan vlanid {text} add untagged {ports}\nconfig ports {ports} pvid {text}'
- },
- 'dgs': {
-  'create': 'vlan database\nvlan {vlan}\nexit', 'del_vlan': 'vlan database\nno vlan {vlan}\nexit',
-  'add_untag': 'interface ethernet 1/0/{ports}\nvlan participation include {vlan}\nvlan pvid {vlan}\nexit',
-  'add_tag': 'interface ethernet 1/0/{ports}\nvlan participation include {vlan}\nvlan tagging tagged\nexit',
-  'del_port': 'interface ethernet 1/0/{ports}\nvlan participation exclude {vlan}\nexit',
-  'show_vlan': 'show vlan {vlan}', 'show_ports': 'show vlan interface ethernet 1/0/{ports}',
-  'pvid': 'interface ethernet 1/0/{ports}\nvlan pvid {vlan}\nexit',
-  'find_mac': 'show bridge mac-address-table | include {mac}', 'show_fdb': 'show bridge mac-address-table',
-  'port_info': 'show interface ethernet 1/0/{ports}', 'port_util': 'show interface ethernet 1/0/{ports} utilization',
-  'port_err': 'show interface ethernet 1/0/{ports} counters', 'clear_cnt': 'clear counters interface ethernet 1/0/{ports}',
-  'port_speed': 'interface ethernet 1/0/{ports}\nspeed {speed}\nexit',
-  'port_off': 'interface ethernet 1/0/{ports}\nshutdown\nexit', 'port_on': 'interface ethernet 1/0/{ports}\nno shutdown\nexit',
-  'save': 'copy running-config startup-config', 'reboot': 'reload',
-  'cam': 'vlan database\nvlan {vlan}\nexit\ninterface ethernet 1/0/{trunk}\nvlan participation include {vlan}\nvlan tagging tagged\nexit\ninterface ethernet 1/0/{ports}\nvlan participation include {vlan}\nvlan pvid {vlan}\nexit\ncopy running-config startup-config',
-  'trunk': 'interface ethernet 1/0/{trunk}\nvlan participation include {vlan}\nvlan tagging tagged\nexit',
-  'ddm': 'show ddm interface ethernet 1/0/{ports}', 'ddm_all': 'show ddm',
-  'ism_show': 'show igmp_snooping multicast_vlan vlan{vlan}',
-  'ism_del_tag': 'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}',
-  'ism_del_mem': 'config igmp_snooping multicast_vlan vlan{vlan} delete member_port {ports}',
-  'ism_add_mem': 'config igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}',
-  'ism_add_src': 'config igmp_snooping multicast_vlan vlan{vlan} add source_port {ports}',
-  'ism_swap': 'config igmp_snooping multicast_vlan vlan{vlan} delete member_port {trunk}\nconfig igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {trunk}\nconfig igmp_snooping multicast_vlan vlan{vlan} delete source_port {ports}\nconfig igmp_snooping multicast_vlan vlan{vlan} add source_port {trunk}\nconfig igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}\nshow igmp_snooping multicast_vlan\nsave',
-  't2a': 'config igmp_snooping multicast_vlan vlan{vlan} delete tag_member_port {ports}\nconfig igmp_snooping multicast_vlan vlan{vlan} add member_port {ports}\ninterface ethernet 1/0/{ports}\nvlan participation exclude {trunk}\nvlan participation include {text}\nvlan pvid {text}\nexit'
- }
-}
-NAMES = {'create':'Создать VLAN','del_vlan':'Удалить VLAN','add_untag':'Добавить порт в VLAN (untagged / абонентский)','add_tag':'Добавить порт в VLAN (tagged / магистраль)','del_port':'Убрать порт из VLAN','show_vlan':'Показать информацию о VLAN','show_ports':'Показать VLAN на порту(ах)','pvid':'Назначить PVID порту (абонентский)','find_mac':'Найти MAC в FDB','show_fdb':'Показать всю FDB-таблицу','port_info':'Информация о портах (состояние/скорость)','port_util':'Загрузка портов (%) — узкие места и штормы','port_err':'Ошибки портов (счётчики CRC и др.)','clear_cnt':'Сбросить счётчики ошибок портов','port_speed':'Изменить скорость/duplex порта','port_off':'Выключить порт','port_on':'Включить порт','save':'Сохранить конфигурацию','reboot':'Перезагрузить свитч (осторожно!)','cam':'КОМБО: камера на VLAN','trunk':'КОМБО: транзит VLAN на магистрали (tagged)','ddm':'DDM оптики на порту','ddm_all':'DDM всех портов (SFP)','ism_show':'ISM: показать конфиг multicast_vlan (IPTV)','ism_del_tag':'ISM: убрать порт из tag_member (магистрали)','ism_del_mem':'ISM: убрать порт из member','ism_add_mem':'ISM: добавить порт в member (абонентский)','ism_add_src':'ISM: добавить source_port (куда заходит поток)','ism_swap':'КОМБО: смена source-порта ISM (безопасный порядок)','t2a':'КОМБО: магистраль→абонент без ошибок ISM'}
-HINTS = {'create':'DES: VLAN — номер (tag), Текст — ИМЯ VLAN (напр. OTS.INTERCOM.UFA.PRV). DGS: только номер.','del_vlan':'VLAN — номер удаляемого VLAN (сначала уберите порты!).','add_untag':'VLAN — номер; Порт(ы) — абонентский порт или порт камеры (21 или 19-24).','add_tag':'VLAN — номер; Порт(ы) магистрали — транк/uplink (26-28 или 28).','del_port':'VLAN — номер ЛИШНЕГО VLAN; Порт(ы) — порты, которые убрать.','show_vlan':'VLAN — номер VLAN, который показать.','show_ports':'Порт(ы) — порты, по которым показать VLAN-конфиг.','pvid':'VLAN — номер; Порт(ы) — абонентские порты, где PVID = этот VLAN.','find_mac':'MAC — адрес вида 00:1A:79:xx:xx:xx.','show_fdb':'Ничего вводить не надо — покажет всю таблицу MAC.','port_info':'Порт(ы) — порты для просмотра (21 или 1-28).','port_util':'Порт(ы) — порты для замера. >80% на uplink = узкое место, 100% при пустых = шторм.','port_err':'Порт(ы) — порты для счётчиков ошибок (CRC/Align).','clear_cnt':'Порт(ы) — порты, на которых сбросить счётчики.','port_speed':'Порт(ы) — порты; Скорость/Duplex из списков (auto/10/100/1000).','port_off':'Порт(ы) — порты, которые выключить.','port_on':'Порт(ы) — порты, которые включить.','save':'Ничего вводить не надо — сохранит конфиг.','reboot':'ВНИМАНИЕ: свитч перезагрузится!','cam':'Текст (DES) — ИМЯ VLAN; VLAN — номер; Порт(ы) магистрали — транк-порты (tagged); Порт(ы) — порт камеры.','trunk':'VLAN — номер; Порт(ы) магистрали — ВСЕ транк-порты, куда прокидываем VLAN тегом.','ddm':'Порт(ы) — порт с SFP. Tx/Rx мощность, температура.','ddm_all':'Ничего вводить не надо.','ism_show':'VLAN — МУЛЬТИКАСТ-VLAN вашего свитча (часто 1151, но бывает другой). Покажет source_port / tag_member_port / member_port.','ism_del_tag':'VLAN — мультикаст-VLAN; Порт(ы) — магистральный порт, который переводим в абонентский.','ism_del_mem':'VLAN — мультикаст-VLAN; Порт(ы) — убираемые из member.','ism_add_mem':'VLAN — мультикаст-VLAN; Порт(ы) — ставшие абонентскими.','ism_add_src':'VLAN — мультикаст-VLAN; Порт(ы) — порт, куда заходит IPTV-поток (напр. 27). БЕЗ source будет ошибка «wrong ISM config / Source is absent».','ism_swap':'VLAN — мультикаст-VLAN; Порт(ы) — СТАРЫЙ source-порт; Порт(ы) магистрали — НОВЫЙ source-порт. Source в ISM VLAN всегда ОДИН! Патч-корд переставить физически после назначения нового source.','t2a':'VLAN — мультикаст-VLAN (1151 или ваш); Порт(ы) — переводимый порт; Порт(ы) магистрали — его СТАРЫЙ магистральный VLAN; Текст — НОВЫЙ абонентский VLAN. Команды в безопасном порядке.'}
-HINTS_DGS = {'create':'VLAN — номер. Команды режима vlan database (Cisco-подобный CLI DGS-1210 ME).','add_untag':'Порт(ы) — номер БЕЗ префикса (подставится 1/0/N).','add_tag':'Порт(ы) — магистральный порт; VLAN получит тег.','del_port':'exclude убирает порт из VLAN.','port_speed':'Скорость из списка (auto/10/100/1000).','save':'Сохранение: copy running-config startup-config.','reboot':'Перезагрузка: reload. Осторожно!','find_mac':'Если фильтр | include не сработал — уберите его из шаблона.','ism_show':'ISM-команды на DGS ME могут отличаться по ревизии — шаблон редактируемый.','t2a':'Порт(ы) магистрали здесь — СТАРЫЙ магистральный VLAN (exclude), Текст — НОВЫЙ абонентский.'}
-MEMO = {'cam':'1) создать VLAN\n2) протранзить на магистрали tagged\n3) добавить порт камеры untagged\n4) PVID порту\n5) save\n6) в биллинге вписать VLAN (абон. и реал.)\n7) проверить поток камеры','trunk':'1) добавить магистральный порт tagged\n2) save\n3) проверить, что uplink поднялся','create':'1) создать VLAN\n2) save','add_untag':'1) добавить порт untagged\n2) save\n3) проверить состояние порта','del_port':'1) убрать порт из VLAN\n2) save','del_vlan':'1) убрать все порты из VLAN\n2) удалить VLAN\n3) save','save':'1) save\n2) убедиться, что конфиг лёг','reboot':'1) предупредить абонентов\n2) reboot/reload\n3) проверить доступность','port_speed':'1) выставить скорость\n2) save\n3) проверить скорость порта','port_err':'1) посмотреть счётчики\n2) ошибки растут — кабель/коннектор/SFP\n3) после устранения — сбросить счётчики','port_info':'1) посмотреть состояние/скорость\n2) порт down или не та скорость — кабель и настройки','port_util':'1) замерить загрузку\n2) >80% на магистрали — планировать апгрейд\n3) 100% без абонентов — петля/шторм','ddm':'1) Tx/Rx мощность\n2) Rx ниже -25 dBm — деградация оптики/грязный коннектор\n3) почистить/заменить патч-корд или SFP\n4) снова show ddm и сравнить','ddm_all':'1) найти порты с аномальной Rx\n2) запланировать чистку/замену оптики','ism_swap':'1) вычистить новый порт из member/tag_member\n2) delete source_port старого\n3) add source_port нового\n4) ФИЗИЧЕСКИ переставить патч-корд\n5) старый порт add member_port\n6) show igmp_snooping multicast_vlan + group vlan\n7) save\n8) два source нельзя: петля мультикаста и дубли каналов; резерв — только LACP/RSTP/ERPS','t2a':'1) show igmp_snooping multicast_vlan vlan<ваш> — посмотреть роли\n2) если порт был source_port — СНАЧАЛА add source_port новому порту\n3) delete tag_member_port, add member_port\n4) убрать порт из магистрального VLAN\n5) add untagged в абонентский + pvid\n6) save\n7) проверить IPTV и show log'}
+# 1) КРИТИЧНО: убрать debug-консоль наружу + многопоточность
+rep("app.run(host='0.0.0.0', port=9500, debug=True, use_reloader=False)",
+    "app.run(host='0.0.0.0', port=9500, debug=False, use_reloader=False, threaded=True)",
+    'debug=False + threaded=True')
 
-JS = 'var TPL=' + json.dumps(TPL, ensure_ascii=False) + ';\n'
-JS += 'TPL.dlink=TPL.des;\n'
-JS += 'var NAMES=' + json.dumps(NAMES, ensure_ascii=False) + ';\n'
-JS += 'var HINTS=' + json.dumps(HINTS, ensure_ascii=False) + ';\n'
-JS += 'var HINTS_DGS=' + json.dumps(HINTS_DGS, ensure_ascii=False) + ';\n'
-JS += 'var MEMO=' + json.dumps(MEMO, ensure_ascii=False) + ';\n'
-JS += r'''
-function setFam(){
-  try{
-    var f=document.getElementById('fam').value;
-    var o=document.getElementById('op');
-    if(f==='custom'){ o.innerHTML='<option value="custom">Свой шаблон</option>'; }
-    else { o.innerHTML=Object.keys(TPL[f]||{}).map(function(k){ return '<option value="'+k+'">'+(NAMES[k]||k)+'</option>'; }).join(''); }
-    fillTpl();
-  }catch(e){ console.error('setFam',e); }
-}
-function fillTpl(){
-  try{
-    var f=document.getElementById('fam').value;
-    var k=document.getElementById('op').value;
-    if(f!=='custom'){ document.getElementById('tpl').value=((TPL[f]||{})[k]||''); }
-    var h=document.getElementById('hint');
-    if(h){ h.textContent='💡 '+((f==='dgs'&&HINTS_DGS[k])||HINTS[k]||'Заполните поля и нажмите «Сгенерировать».'); }
-    var m=document.getElementById('memo');
-    if(m){ m.value=MEMO[k]||''; }
-    if(k.indexOf('ism')===0||k==='t2a'){
-      var vv=document.getElementById('v');
-      if(!vv.value||vv.value==='135'){ vv.value='1151'; }
-    }
-    var sr=document.getElementById('spdRow');
-    if(sr){ sr.style.display=(k==='port_speed')? 'inline':'none'; }
-  }catch(e){ console.error('fillTpl',e); }
-}
-function gen(){
-  try{
-    var t=document.getElementById('tpl').value;
-    if(!t){ alert('Шаблон пуст — выберите операцию'); return; }
-    var spd=(document.getElementById('spd')||{}).value||'auto';
-    var dpx=(document.getElementById('dpx')||{}).value||'';
-    var r=t.replace(/{vlan}/g,document.getElementById('v').value||'')
-           .replace(/{ports}/g,document.getElementById('p').value||'')
-           .replace(/{mac}/g,document.getElementById('m').value||'')
-           .replace(/{ip}/g,document.getElementById('ip').value||'')
-           .replace(/{text}/g,document.getElementById('txt').value||'')
-           .replace(/{trunk}/g,(document.getElementById('tr')||{}).value||'')
-           .replace(/{speed}/g,spd)
-           .replace(/{duplex}/g,dpx? ' duplex '+dpx : '');
-    document.getElementById('outg').value=r;
-  }catch(e){ alert('gen: '+e.message); }
-}
-function cpy(){ navigator.clipboard.writeText(document.getElementById('outg').value); alert('Команды скопированы'); }
-function toTools(){ sessionStorage.setItem('gen2tools', document.getElementById('outg').value); location.href='/tools'; }
-function sav(){
-  var t=prompt('Название в справочнике:','Команда: '+(NAMES[document.getElementById('op').value]||document.getElementById('op').value));
-  if(!t) return;
-  fetch('/api/commands',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({title:t, category:'генератор', body:document.getElementById('outg').value, notes:document.getElementById('memo').value})})
-  .then(function(){ alert('Сохранено в справочник команд'); });
-}
-if(document.readyState!=='loading'){ setFam(); }
-else { document.addEventListener('DOMContentLoaded', setFam); }
+# 2) init_db: создание недостающих таблиц и колонок (чистая установка не упадёт)
+if 'CREATE TABLE IF NOT EXISTS region_vlans' not in src:
+    rep("    conn.commit()\n    cursor = conn.cursor()",
+"""    for _stmt in (
+        "CREATE TABLE IF NOT EXISTS commands_dict (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, category TEXT, body TEXT, notes TEXT)",
+        "CREATE TABLE IF NOT EXISTS change_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, source TEXT, message TEXT)",
+        "CREATE TABLE IF NOT EXISTS cameras (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER, side TEXT, model TEXT, serial TEXT, ip TEXT, mac TEXT, zone TEXT, notes TEXT, config_text TEXT)",
+        "CREATE TABLE IF NOT EXISTS region_vlans (id INTEGER PRIMARY KEY AUTOINCREMENT, region TEXT, switch_ip TEXT, segment TEXT, vlan INTEGER, UNIQUE(region, vlan))",
+        "CREATE TABLE IF NOT EXISTS kb_articles (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, category TEXT, tags TEXT, body TEXT, schema TEXT, created_at TEXT)",
+    ):
+        try:
+            conn.execute(_stmt)
+        except Exception:
+            pass
+    for _tbl, _cols in (('work_orders', ('order_type TEXT', 'old_podyezd TEXT', 'new_podyezd TEXT', 'new_switch_location TEXT')),
+                        ('cameras', ('login TEXT', 'password TEXT', 'rtsp TEXT', 'vlan TEXT', 'port TEXT', 'switch_name TEXT', 'switch_port TEXT'))):
+        for _c in _cols:
+            try:
+                conn.execute('ALTER TABLE ' + _tbl + ' ADD COLUMN ' + _c)
+            except Exception:
+                pass
+    conn.commit()
+    cursor = conn.cursor()""", 'init_db: недостающие таблицы/колонки')
+
+# 3) CSS: селекты не рвут модалки и страницы
+if 'def inject_select_fix' not in src:
+    ep = '''
+@app.after_request
+def inject_select_fix(resp):
+    try:
+        if 'text/html' in (resp.content_type or ''):
+            t = resp.get_data(as_text=True)
+            if '</head>' in t and 'select{max-width:100%}' not in t:
+                t = t.replace('</head>', '<style>select{max-width:100%;}</style></head>', 1)
+                resp.set_data(t)
+    except Exception:
+        pass
+    return resp
+
+
 '''
-open(JS_PATH, 'w', encoding='utf-8').write(JS)
-g = open(JS_PATH, encoding='utf-8').read()
-if ('ism_swap' in g) and ('TPL.dlink=TPL.des' in g) and ('function gen()' in g):
-    print('ok: gen.js записан и проверен, размер', len(g))
-else:
-    shutil.copyfile(JS_PATH + '.bak', JS_PATH)
-    raise SystemExit('ПРОВЕРКА НЕ ПРОШЛА — откатил gen.js из bak, ничего не изменено')
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + ep + src[idx:]
+    FIXES.append('CSS select max-width'); print('  ok: CSS select max-width')
 
-s = open('swh.py', encoding='utf-8').read()
-s2, n = re.subn(r'/static/gen\.js\?v=\d+', '/static/gen.js?v=16', s)
+# 4) Сброс кэша common.js
+rep('<script src="/static/common.js?v=2"></script>', '<script src="/static/common.js?v=4"></script>', 'common.js v4 (base)')
+rep('<script src="/static/common.js?v=3"></script>', '<script src="/static/common.js?v=4"></script>', 'common.js v4 (kb)')
+
+# 5) Полный чек-ап
+if "'/api/admin/health'" not in src:
+    ep = '''
+@app.route('/api/admin/health')
+def admin_health():
+    import urllib.request
+    import subprocess
+    if request.args.get('pin') != ADMIN_PIN:
+        return jsonify({'error': 'pin'}), 403
+    want = ['/', '/map', '/commands', '/admin', '/stock', '/field', '/tools', '/gen', '/vlans', '/kb',
+            '/order/<int:order_id>', '/planner/<int:order_id>', '/fdb/<int:order_id>', '/passport/<int:order_id>',
+            '/api/admin/job', '/api/admin/apply', '/api/admin/ghupdate', '/api/admin/selfheal',
+            '/api/cameras', '/api/changelog', '/api/vlans', '/api/kb']
+    have = set(str(r) for r in app.url_map.iter_rules())
+    ui = {}
+    for u, m in (('/gen', 'gen.js'), ('/vlans', 'vlanspage.js'), ('/kb', 'kb.js'), ('/', 'orderSearch'), ('/admin', 'admin.js')):
+        try:
+            t = urllib.request.urlopen('http://localhost:9500' + u, timeout=5).read().decode()
+            ui[u] = 'ok' if m in t else 'BAD:' + m
+        except Exception as e:
+            ui[u] = 'ERR'
+    gj = {}
+    try:
+        g = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'gen.js'), encoding='utf-8').read()
+        gj = {'alias_dlink': 'TPL.dlink=TPL.des' in g, 'ism_swap': 'ism_swap' in g, 'show_log': 'show_log' in g, 'size': len(g)}
+    except Exception:
+        gj = {'error': 'gen.js не читается'}
+    try:
+        cr = subprocess.run(['crontab', '-l'], capture_output=True, text=True).stdout or ''
+        autostart = 'swh.py' in cr
+    except Exception:
+        autostart = None
+    stamp = {}
+    try:
+        stamp = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'update_stamp.json'), encoding='utf-8'))
+    except Exception:
+        pass
+    return jsonify({'routes_missing': [w for w in want if w not in have], 'ui': ui,
+                    'vlans_count': _vlans_count(), 'files_missing': _missing_files(),
+                    'genjs': gj, 'autostart': autostart, 'debug': app.debug, 'stamp': stamp})
+
+
+@app.route('/api/vlans/export')
+def vlans_export():
+    conn = get_db()
+    ensure_vlans(conn)
+    rows = conn.execute('SELECT region, switch_ip, segment, vlan FROM region_vlans ORDER BY region, vlan').fetchall()
+    conn.close()
+    out = io.StringIO()
+    w = csv.writer(out, delimiter=';')
+    w.writerow(['Район', 'IP-адрес свитча', 'Сегмент (VLAN)', 'Номер VLAN'])
+    for r in rows:
+        w.writerow([r['region'], r['switch_ip'], r['segment'], r['vlan']])
+    return Response(out.getvalue().encode('utf-8-sig'), mimetype='text/csv',
+                    headers={'Content-Disposition': 'attachment; filename=vlans_backup.csv'})
+
+
+'''
+    idx = src.rfind("if __name__ == '__main__':")
+    src = src[:idx] + ep + src[idx:]
+    FIXES.append('health + csv export'); print('  ok: /api/admin/health + /api/vlans/export')
+
+rep('<button class="btn btn-primary" onclick="migrate()">🚚 Миграция: собрать архив</button>',
+    '<button class="btn btn-primary" onclick="migrate()">🚚 Миграция: собрать архив</button>\n<button id="healthBtn" class="btn btn-success" onclick="healthCheck()">🩺 Полный чек-ап</button>',
+    'кнопка чек-апа')
+rep('<div class="card"><b>➕ Добавить строку</b>',
+    '<div class="card"><a class="btn" style="background:#3498db;" href="/api/vlans/export">📤 Скачать CSV (бэкап справочника)</a></div>\n<div class="card"><b>➕ Добавить строку</b>',
+    'кнопка CSV на /vlans')
+
+ajs = open('static/admin.js', encoding='utf-8').read() if os.path.exists('static/admin.js') else ''
+if 'function healthCheck()' not in ajs:
+    ajs += '''
+function healthCheck(){
+  fetch('/api/admin/health?pin='+encodeURIComponent(getPin())).then(function(r){return r.json();}).then(function(h){
+    var L=[];
+    L.push('Версия: '+((h.stamp||{}).version||'нет штампа')+' от '+((h.stamp||{}).ts||'?'));
+    L.push('debug: '+h.debug+' (должен быть false)');
+    L.push('Маршруты отсутствуют: '+((h.routes_missing||[]).join(', ')||'нет'));
+    Object.keys(h.ui||{}).forEach(function(k){ L.push('UI '+k+': '+h.ui[k]); });
+    L.push('VLANов в БД: '+h.vlans_count);
+    L.push('Файлов-призраков: '+((h.files_missing||[]).join(', ')||'0'));
+    L.push('gen.js: '+JSON.stringify(h.genjs));
+    L.push('Автозапуск: '+h.autostart);
+    alert(L.join('\\n'));
+  }).catch(function(e){ alert('Ошибка: '+e.message); });
+}
+'''
+    open('static/admin.js', 'w', encoding='utf-8').write(ajs)
+    FIXES.append('admin.js healthCheck'); print('  ok: admin.js healthCheck')
+
+# 6) gen.js: show log + ism_group, версия v17
+gp = 'static/gen.js'
+if os.path.exists(gp):
+    shutil.copyfile(gp, gp + '.bak17')
+    g = open(gp, encoding='utf-8').read()
+    if 'show_log' not in g:
+        g2 = re.sub(r"(['\"])ddm_all\1(\s*:\s*)(['\"])show ddm\3",
+                    lambda m: m.group(0) + ",\n  'show_log': 'show log',\n  'ism_group': 'show igmp_snooping group vlan vlan{vlan}'",
+                    g, count=2)
+        g2 = re.sub(r"(['\"])t2a\1(\s*:\s*)(['\"])[^'\"]*\3(\s*})",
+                    lambda m: m.group(0)[:-len(m.group(4))] + ", 'show_log': 'Показать лог свитча (show log)', 'ism_group': 'ISM: multicast-группы по VLAN'" + m.group(4),
+                    g2, count=1)
+        if 'show_log' in g2:
+            g = g2
+            open(gp, 'w', encoding='utf-8').write(g)
+            FIXES.append('gen.js show_log/ism_group'); print('  ok: gen.js + show_log/ism_group')
+        else:
+            print('  ПРОПУСК: gen.js якоря не найдены (файл не тронут)')
+    else:
+        print('  gen.js: show_log уже есть')
+new_src, n = re.subn(r'/static/gen\.js\?v=\d+', '/static/gen.js?v=17', src)
 if n:
-    ast.parse(s2)
-    open('swh.py', 'w', encoding='utf-8').write(s2)
-    print('ok: версия gen.js -> v16 (сброс кэша)')
-else:
-    print('ВНИМАНИЕ: строка ?v= не найдена — после применения нажмите Ctrl+F5 на /gen')
-print('ГОТОВО. Больше ничего не менялось.')
+    src = new_src; FIXES.append('gen.js v17'); print('  ok: gen.js -> v17')
+
+# 7) Штамп + проверка + запись
+try:
+    ast.parse(src)
+except SyntaxError as e:
+    shutil.copyfile('backups/swh_pre_v17_' + TS + '.py', 'swh.py')
+    raise SystemExit('СИНТАКСИС НЕ ОК — откатил swh.py: ' + str(e))
+open('swh.py', 'w', encoding='utf-8').write(src)
+json.dump({'ts': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'version': 'v17', 'fixes': FIXES},
+          open('update_stamp.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+print('ГОТОВО v17. Применено:', len(FIXES), 'правок. Бэкап: backups/swh_pre_v17_' + TS + '.py')
