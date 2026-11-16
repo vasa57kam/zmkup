@@ -1,14 +1,12 @@
-# update.py — v25: NetLab PRO — глубокая симуляция (потоки, FDB, аварии, шторм, IGMP, PON, ping),
-# рамка выделения + массовые операции, быстрая очистка с отменой, проверка VLAN-плана с автофиксом,
-# генератор плана работ, сохранённые виды, undo/redo, звук с mute, 14 живых контролов.
+# update.py — v25b: NetLab PRO (тот же функционал) + ИСПРАВЛЕННЫЙ self-check (не падает на JS-id)
 import ast, json, os, re, shutil
 from datetime import datetime
 TS = datetime.now().strftime('%Y%m%d_%H%M%S')
 os.makedirs('backups', exist_ok=True)
 os.makedirs('static', exist_ok=True)
-shutil.copyfile('swh.py', 'backups/swh_pre_v25_' + TS + '.py')
+shutil.copyfile('swh.py', 'backups/swh_pre_v25b_' + TS + '.py')
 if os.path.exists('static/netlab.html'):
-    shutil.copyfile('static/netlab.html', 'backups/netlab_pre_v25_' + TS + '.html')
+    shutil.copyfile('static/netlab.html', 'backups/netlab_pre_v25b_' + TS + '.html')
 
 HTML = r'''<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -560,7 +558,6 @@ function dupSel(){
 }
 function undo(){if(!undoStack.length){toast('Нечего отменять');return;}redoStack.push(JSON.stringify(S));S=JSON.parse(undoStack.pop());norm();clearSel();autosave();mark();props();renderFlows();toast('Отменено');}
 function redo(){if(!redoStack.length){toast('Нечего повторять');return;}undoStack.push(JSON.stringify(S));S=JSON.parse(redoStack.pop());norm();clearSel();autosave();mark();props();renderFlows();toast('Повторено');}
-/* ---------- симуляция ---------- */
 function allows(L,v){var list=String(L.vlans||'').split(',').map(function(x){return x.trim();});return L.mode==='trunk'?list.indexOf(String(v))>=0:String(L.vlans)===String(v);}
 function treeLinks(){
  var root=null;S.devices.forEach(function(d){if(!root&&(d.type==='core'||d.type==='agg'))root=d.id;});
@@ -703,14 +700,9 @@ function loop(t){
   S.links.forEach(function(L){L.load*=0.96;});
   if($('cHeat').checked&&Math.random()<0.12)mark();
  }
- if(sim.running&&sim.packets.length===0&&$('simMode').value!=='flows'&&active){
-  var mode=$('simMode').value;
-  if(mode==='ping'||mode==='multicast'||mode==='pon'||mode==='broadcast'){/* ждём повторного пуска или авто-повтор */}
- }
  $('stPkts').textContent=sim.stats.pk;
  $('stDrops').textContent=sim.stats.dr;
 }
-/* ---------- проверка VLAN-плана ---------- */
 function checkPlan(){
  var out=[],leaves=S.devices.filter(function(d){return d.vlan&&!isSw(d);});
  var roots=S.devices.filter(function(d){return d.type==='core'||d.type==='agg'||d.type==='nvr';});
@@ -741,7 +733,6 @@ function fixLink(id,v){
  else L.vlans=String(v);
  autosave();mark();checkPlan();toast('VLAN '+v+' пропущен на линии #'+id,function(){undo();});
 }
-/* ---------- план работ ---------- */
 function buildPlan(){
  var syn=$('planSyn').value,txt='';
  S.devices.filter(isSw).forEach(function(d){
@@ -769,7 +760,6 @@ function buildPlan(){
  if(!txt)txt='Нет коммутаторов на схеме.';
  $('planOut').textContent=txt;
 }
-/* ---------- потоки ---------- */
 function renderFlows(){
  var el=$('flowList');
  el.innerHTML=(S.flows||[]).map(function(f){
@@ -782,7 +772,6 @@ function renderFlows(){
  Array.prototype.forEach.call(el.querySelectorAll('[data-fdst]'),function(s){s.value=String(flowById(+s.getAttribute('data-fdst')).dst||0);});
 }
 function flowById(id){for(var i=0;i<(S.flows||[]).length;i++){if(S.flows[i].id===id)return S.flows[i];}return {};}
-/* ---------- виды / схемы / экспорт ---------- */
 function views(){try{return JSON.parse(localStorage.getItem('netlab_views')||'[]');}catch(e){return [];}}
 function renderViews(){
  $('viewList').innerHTML=views().map(function(v,i){return '<div class="viewRow"><button data-view="'+i+'">📌 '+esc(v.name)+'</button><button class="d" data-vdel="'+i+'" style="flex:0;padding:4px 8px">✕</button></div>';}).join('')||'<div style="color:#7f93b8">видов нет</div>';
@@ -837,7 +826,6 @@ function tidy(){
  Object.keys(by).forEach(function(l){by[l].forEach(function(d,i){d.x=120+i*230;d.y=70+(+l)*150;});});
  autosave();mark();fit();toast('Автораскладка выполнена',function(){undo();});
 }
-/* ---------- события интерфейса ---------- */
 function bind(){
  $('cv').addEventListener('pointerdown',function(e){
   var t=e.target,g=null,l=null;
@@ -1052,20 +1040,21 @@ requestAnimationFrame(loop);
 </script>
 </body></html>
 '''
-open(os.path.join('static', 'netlab.html'), 'w', encoding='utf-8').write(HTML)
-print('ok: static/netlab.html (' + str(len(HTML)) + ' байт)')
 
-# --- self-check: ids referenced vs present, duplicate ids, script balance ---
-ids = re.findall(r'id="([A-Za-z0-9_]+)"', HTML)
-dup = set([i for i in ids if ids.count(i) > 1])
-refs = set(re.findall(r"\$\('([A-Za-z0-9_]+)'\)", HTML))
-missing = sorted(refs - set(ids))
+# ---------- ИСПРАВЛЕННЫЙ self-check: только разметка, динамические id разрешены ----------
+markup = HTML.split('<script>')[0]
 script = HTML.split('<script>')[1].split('</script>')[0]
+markup_ids = re.findall(r'id="([A-Za-z0-9_]+)"', markup)
+dup = sorted(set([i for i in markup_ids if markup_ids.count(i) > 1]))
+refs = set(re.findall(r"\$\('([A-Za-z0-9_]+)'\)", script))
+dynamic_ok = {'pDel', 'pBulkVlan', 'pBulkApply', 'pBulkUp'}
+missing = sorted(refs - set(markup_ids) - dynamic_ok)
+clean = re.sub(r'/\*.*?\*/', '', script, flags=re.S)
 bal = {'{': 0, '(': 0, '[': 0}
 pairs = {'}': '{', ')': '(', ']': '['}
 instr = None
 escq = False
-for ch in script:
+for ch in clean:
     if instr:
         if escq:
             escq = False
@@ -1083,16 +1072,17 @@ for ch in script:
         bal[pairs[ch]] -= 1
 problems = []
 if dup:
-    problems.append('duplicate ids: ' + ','.join(sorted(dup)))
+    problems.append('duplicate markup ids: ' + ','.join(dup))
 if missing:
     problems.append('missing ids: ' + ','.join(missing))
 if any(v != 0 for v in bal.values()):
     problems.append('unbalanced brackets: ' + str(bal))
 if problems:
-    if os.path.exists('backups/netlab_pre_v25_' + TS + '.html'):
-        shutil.copyfile('backups/netlab_pre_v25_' + TS + '.html', 'static/netlab.html')
-    raise SystemExit('SELF-CHECK FAILED (откат netlab.html): ' + ' | '.join(problems))
-print('ok: self-check ids/brackets пройден')
+    raise SystemExit('SELF-CHECK FAILED (файлы НЕ тронуты): ' + ' | '.join(problems))
+print('ok: self-check пройден (markup ids:', len(markup_ids), ', refs:', len(refs), ', brackets balanced)')
+
+open(os.path.join('static', 'netlab.html'), 'w', encoding='utf-8').write(HTML)
+print('ok: static/netlab.html записан (' + str(len(HTML)) + ' байт)')
 
 src = open('swh.py', encoding='utf-8').read()
 if "static', 'netlab.html'" not in src:
@@ -1107,19 +1097,22 @@ if "static', 'netlab.html'" not in src:
     if n:
         src = new_src
         print('ok: /netlab -> файл, no-store')
+    else:
+        print('ПРОПУСК: маршрут netlab_page не найден')
 else:
     print('ok: маршрут уже файловый')
 
 try:
     ast.parse(src)
 except SyntaxError as e:
-    shutil.copyfile('backups/swh_pre_v25_' + TS + '.py', 'swh.py')
+    shutil.copyfile('backups/swh_pre_v25b_' + TS + '.py', 'swh.py')
     raise SystemExit('СИНТАКСИС НЕ ОК — откат: ' + str(e))
 open('swh.py', 'w', encoding='utf-8').write(src)
-json.dump({'ts': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'version': 'v25',
-           'fixes': ['netlab PRO: flows engine, FDB learning, faults, storm/loopdetect, IGMP, PON filter, ping RTT',
-                     'marquee multi-select + bulk vlan/delete/up', 'quick clear-all with undo', 'undo/redo',
-                     'VLAN plan check + one-click fix', 'work plan generator DES/DGS', 'saved views',
-                     'registry drag reorder', 'sound with mute', '14 live controls', 'self-check ids/brackets']},
+json.dump({'ts': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'version': 'v25b',
+           'fixes': ['fixed self-check (markup-only ids, dynamic ids allowed, comments stripped)',
+                     'netlab PRO: flows engine, FDB, faults, storm/loopdetect, IGMP, PON, ping RTT',
+                     'marquee multi-select + bulk ops', 'quick clear-all with undo', 'undo/redo',
+                     'VLAN plan check + one-click fix', 'work plan DES/DGS', 'saved views',
+                     'registry drag reorder', 'sound with mute', '14 live controls']},
           open('update_stamp.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
-print('ГОТОВО v25. Бэкапы: backups/swh_pre_v25_' + TS + '.py, backups/netlab_pre_v25_' + TS + '.html')
+print('ГОТОВО v25b. Бэкапы: backups/swh_pre_v25b_' + TS + '.py, backups/netlab_pre_v25b_' + TS + '.html')
